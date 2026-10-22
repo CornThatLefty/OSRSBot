@@ -1,0 +1,14 @@
+services:
+  osrsbot:
+    build: .
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      DASHBOARD_HOST: 0.0.0.0
+    volumes:
+      - ./data:/app/data      # settings, bot credentials, notes, logs, benchmark results
+    ports:
+      # Loopback only: reach it with an SSH tunnel or a reverse proxy (Caddy, Cloudflare Tunnel).
+      # Change to "8080:8080" only if DASHBOARD_PASSWORD is set and you put HTTPS in front.
+      - "127.0.0.1:8080:8080"
+    shm_size: 512mb           # Chromium needs more than Docker's 64 MB default in browser mode

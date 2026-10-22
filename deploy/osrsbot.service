@@ -1,0 +1,31 @@
+# systemd unit for running OSRSBot directly on a host or LXC container (no Docker).
+#
+# Assumes the repo is cloned to /opt/osrsbot (see README, "Proxmox LXC (Arch)"):
+#   sudo useradd --system --no-create-home --home-dir /opt/osrsbot osrsbot
+#   sudo chown -R osrsbot:osrsbot /opt/osrsbot
+#   sudo cp deploy/osrsbot.service /etc/systemd/system/
+#   sudo systemctl daemon-reload && sudo systemctl enable --now osrsbot
+#   journalctl -u osrsbot -f
+#
+# ExecStart must point at your bun binary: check with `which bun`.
+#   Arch (pacman -S bun):        /usr/bin/bun
+#   bun.sh install script:       /home/<user>/.bun/bin/bun (or copy it to /usr/local/bin/bun)
+[Unit]
+Description=OSRSBot (Claude agent for rs-sdk)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=osrsbot
+WorkingDirectory=/opt/osrsbot
+EnvironmentFile=/opt/osrsbot/.env
+ExecStart=/usr/bin/bun src/index.ts
+Restart=always
+RestartSec=10
+# SIGTERM lets the agent and game client stop cleanly (the game saves on logout).
+KillSignal=SIGTERM
+TimeoutStopSec=20
+
+[Install]
+WantedBy=multi-user.target

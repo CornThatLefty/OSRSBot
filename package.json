@@ -1,0 +1,19 @@
+{
+  "name": "osrsbot",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "setup": "bun scripts/setup.ts",
+    "start": "bun src/index.ts",
+    "dev": "bun --watch src/index.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^1.1.0",
+    "puppeteer": "^24.0.0"
+  },
+  "devDependencies": {
+    "@types/bun": "latest",
+    "typescript": "^5"
+  }
+}

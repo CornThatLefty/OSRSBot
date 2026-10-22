@@ -1,0 +1,195 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>OSRSBot</title>
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<div id="login" class="login" hidden>
+  <form id="login-form" class="card login-card">
+    <h1>OSRSBot</h1>
+    <label>Dashboard password <input type="password" id="login-password" autocomplete="current-password" required autofocus></label>
+    <button class="primary" type="submit">Log in</button>
+    <p class="muted" id="login-error"></p>
+  </form>
+</div>
+
+<header class="topbar">
+  <div class="brand"><span class="logo">⚔</span> OSRSBot <span id="bot-name" class="muted"></span></div>
+  <div class="pills">
+    <span class="pill" id="pill-client" title="Game client">client</span>
+    <span class="pill" id="pill-gateway" title="SDK connection to the gateway">gateway</span>
+    <span class="pill" id="pill-agent" title="Claude agent">agent</span>
+    <span class="pill" id="pill-spend" title="Estimated Claude API spend today">$0.00</span>
+  </div>
+</header>
+
+<main class="layout">
+  <section class="col-main">
+    <div class="card">
+      <div class="card-head">
+        <h2>Live view</h2>
+        <div class="tabs" role="tablist">
+          <button class="tab active" data-view="radar" role="tab">Radar</button>
+          <button class="tab" data-view="client3d" role="tab">3D client</button>
+        </div>
+      </div>
+      <div class="view" id="view-radar">
+        <canvas id="radar" width="640" height="420"></canvas>
+        <div class="radar-side">
+          <div id="where" class="where"></div>
+          <div id="dialog" class="dialog" hidden></div>
+          <ul id="messages" class="messages"></ul>
+        </div>
+      </div>
+      <div class="view" id="view-client3d" hidden>
+        <div id="client3d-off" class="empty">
+          The 3D view streams the real game client, which only runs in <b>Browser</b> client mode.
+          Switch <i>Client mode</i> in Settings (it restarts the client and uses more CPU and memory).
+        </div>
+        <div id="client3d-on" hidden>
+          <canvas id="client3d" width="1024" height="700"></canvas>
+          <div class="camera-keys">
+            <span class="muted">Camera</span>
+            <button data-key="ArrowLeft" title="Rotate left">◀</button>
+            <button data-key="ArrowUp" title="Tilt up">▲</button>
+            <button data-key="ArrowDown" title="Tilt down">▼</button>
+            <button data-key="ArrowRight" title="Rotate right">▶</button>
+            <span class="muted">or hover the view and use arrow keys. View only: clicks don't reach the game.</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="card activity-card">
+      <div class="card-head">
+        <h2>Agent activity</h2>
+        <div class="row gap">
+          <label class="check"><input type="checkbox" id="show-thinking" checked> thinking</label>
+          <label class="check"><input type="checkbox" id="show-results" checked> tool output</label>
+          <label class="check"><input type="checkbox" id="autoscroll" checked> follow</label>
+        </div>
+      </div>
+      <div id="current-tool" class="current-tool" hidden>
+        <span class="spinner"></span><span id="current-tool-text"></span><span id="current-tool-time" class="muted"></span>
+        <button id="btn-interrupt" class="small">Interrupt</button>
+      </div>
+      <div id="feed" class="feed"></div>
+      <div id="live" class="live" hidden></div>
+      <form id="operator-form" class="operator">
+        <input id="operator-text" placeholder="Message the agent (it reads this after its current step)…" autocomplete="off">
+        <button type="submit">Send</button>
+      </form>
+    </div>
+  </section>
+
+  <section class="col-side">
+    <div class="card">
+      <h2>Control</h2>
+      <div class="control-row">
+        <span class="label">Agent</span>
+        <button id="btn-agent-start" class="primary">Start</button>
+        <button id="btn-agent-pause">Pause</button>
+        <button id="btn-agent-stop" class="danger">Stop</button>
+        <button id="btn-agent-session" title="End this session and start fresh from the notes">New session</button>
+      </div>
+      <div class="control-row">
+        <span class="label">Client</span>
+        <button id="btn-client-start">Start</button>
+        <button id="btn-client-restart">Restart</button>
+        <button id="btn-client-stop">Stop</button>
+      </div>
+      <p id="agent-detail" class="muted small-text"></p>
+    </div>
+
+    <div class="card">
+      <h2>Progress</h2>
+      <div class="stats">
+        <div class="stat"><span class="stat-v" id="st-level">–</span><span class="stat-k">Total level</span></div>
+        <div class="stat"><span class="stat-v" id="st-xp">–</span><span class="stat-k">Total XP</span></div>
+        <div class="stat"><span class="stat-v" id="st-xph">–</span><span class="stat-k">XP/h (10 min)</span></div>
+        <div class="stat"><span class="stat-v" id="st-xph60">–</span><span class="stat-k">XP/h (1 h)</span></div>
+        <div class="stat"><span class="stat-v" id="st-peak">–</span><span class="stat-k">Peak XP/min (15 s)</span></div>
+        <div class="stat"><span class="stat-v" id="st-rank">–</span><span class="stat-k" id="st-rank-k">Leaderboard rank</span></div>
+      </div>
+      <canvas id="xp-chart" width="420" height="110"></canvas>
+      <div id="skills" class="skills"></div>
+    </div>
+
+    <div class="card">
+      <h2>Inventory</h2>
+      <div id="inventory" class="inventory"></div>
+      <div id="equipment" class="equipment muted"></div>
+    </div>
+
+    <div class="card">
+      <h2>Benchmark</h2>
+      <div id="bench-active" class="bench-active" hidden></div>
+      <form id="bench-form" class="form">
+        <label>Label <input id="bench-label" placeholder="e.g. opus-high woodcutting"></label>
+        <label>Minutes <input id="bench-minutes" type="number" min="1" max="1440" value="15"></label>
+        <label class="wide">Goal for this run (blank = current goal)
+          <textarea id="bench-goal" rows="2" placeholder="e.g. Train Woodcutting as fast as possible."></textarea></label>
+        <button class="primary" type="submit">Start run</button>
+        <button type="button" id="bench-stop">Stop run</button>
+      </form>
+      <p class="muted small-text">Scores the agent like <a href="https://github.com/MaxBittker/rs-bench" target="_blank" rel="noopener">rs-bench</a>: XP gained and peak XP/min over any 15-second window. The agent pauses when the run ends.</p>
+      <div class="table-wrap"><table id="runs"><thead><tr><th>Run</th><th>Model</th><th>XP</th><th>Lvls</th><th>Peak/min</th><th>XP/h</th><th>Cost</th></tr></thead><tbody></tbody></table></div>
+    </div>
+
+    <div class="card">
+      <h2>Goal &amp; notes</h2>
+      <form id="goal-form" class="form">
+        <label class="wide">Goal <textarea id="goal" rows="3"></textarea></label>
+        <button type="submit">Save goal</button>
+      </form>
+      <details>
+        <summary>Agent notes (its memory between sessions)</summary>
+        <form id="notes-form" class="form">
+          <textarea id="notes" rows="12" class="mono wide"></textarea>
+          <button type="submit">Save notes</button>
+        </form>
+      </details>
+    </div>
+
+    <div class="card">
+      <h2>Settings</h2>
+      <form id="settings-form" class="form">
+        <label>Bot name <input name="botName" maxlength="12" pattern="[A-Za-z0-9]{1,12}" placeholder="max 12 letters/digits"></label>
+        <label>Server <input name="server" placeholder="rs-sdk-demo.fly.dev"></label>
+        <label>Client mode
+          <select name="clientMode"><option value="lite">Lite (headless, cheap)</option><option value="browser">Browser (3D view)</option></select></label>
+        <label>Model
+          <select name="model">
+            <option value="claude-opus-5-5">Claude Opus 5.5</option>
+            <option value="claude-sonnet-5-5">Claude Sonnet 5.5</option>
+            <option value="claude-haiku-5-5">Claude Haiku 5.5</option>
+            <option value="claude-fable-5-1">Claude Fable 5.1</option>
+          </select></label>
+        <label>Effort
+          <select name="effort"><option>low</option><option>medium</option><option>high</option><option>xhigh</option><option>max</option></select></label>
+        <label>Tool calls per session <input name="maxTurnsPerSession" type="number" min="5" max="200"></label>
+        <label>Max code run (s) <input name="maxCodeSeconds" type="number" min="10" max="1800"></label>
+        <label>Daily budget ($, 0 = none) <input name="dailyBudgetUsd" type="number" min="0" step="1"></label>
+        <label class="check"><input name="showChat" type="checkbox"> Let the agent read player chat</label>
+        <label class="check"><input name="autoStart" type="checkbox"> Start client and agent on boot</label>
+        <button class="primary" type="submit">Save settings</button>
+        <span id="settings-msg" class="muted"></span>
+      </form>
+      <p class="muted small-text">Changing bot name, server, client mode or chat restarts the game client. A new bot name creates a new account on first login; its password is in <code>data/credentials.json</code>.</p>
+    </div>
+
+    <div class="card">
+      <details id="client-log-details">
+        <summary>Game client log</summary>
+        <pre id="client-log" class="log"></pre>
+      </details>
+    </div>
+  </section>
+</main>
+
+<script src="/app.js"></script>
+</body>
+</html>

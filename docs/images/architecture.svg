@@ -1,0 +1,103 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 470" width="960" height="470" font-family="system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif">
+  <title>OSRSBot architecture</title>
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#8b929c"/>
+    </marker>
+    <marker id="arrow-gold" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#d9a441"/>
+    </marker>
+    <style>
+      .bg { fill: #0f1114; }
+      .group { fill: #14171b; stroke: #2a2f37; stroke-width: 1.5; }
+      .box { fill: #1e2228; stroke: #3a414b; stroke-width: 1.2; }
+      .hot { fill: #2b2516; stroke: #d9a441; stroke-width: 1.5; }
+      .ext { fill: #172230; stroke: #2f4a63; stroke-width: 1.2; }
+      .title { fill: #8b929c; font-size: 12px; font-weight: 600; letter-spacing: .08em; }
+      .name { fill: #e4e6ea; font-size: 14px; font-weight: 600; }
+      .sub { fill: #8b929c; font-size: 11.5px; }
+      .gold { fill: #f0c060; }
+      .line { stroke: #8b929c; stroke-width: 1.5; fill: none; }
+      .line-gold { stroke: #d9a441; stroke-width: 1.8; fill: none; }
+      .label { fill: #8b929c; font-size: 11px; }
+    </style>
+  </defs>
+
+  <rect class="bg" x="0" y="0" width="960" height="470" rx="14"/>
+
+  <!-- Operator -->
+  <rect class="box" x="24" y="190" width="130" height="78" rx="10"/>
+  <text class="name" x="89" y="222" text-anchor="middle">You</text>
+  <text class="sub" x="89" y="242" text-anchor="middle">any browser,</text>
+  <text class="sub" x="89" y="257" text-anchor="middle">phone included</text>
+
+  <!-- OSRSBot process -->
+  <rect class="group" x="190" y="24" width="440" height="422" rx="12"/>
+  <text class="title" x="210" y="50">OSRSBOT · ONE BUN PROCESS</text>
+
+  <rect class="box" x="210" y="66" width="190" height="84" rx="9"/>
+  <text class="name" x="226" y="92">Dashboard</text>
+  <text class="sub" x="226" y="112">live feed, radar, 3D view,</text>
+  <text class="sub" x="226" y="128">controls, settings, login</text>
+
+  <rect class="hot" x="420" y="66" width="190" height="84" rx="9"/>
+  <text class="name gold" x="436" y="92">Claude agent</text>
+  <text class="sub" x="436" y="112">sessions with notes,</text>
+  <text class="sub" x="436" y="128">caching, budget cap</text>
+
+  <rect class="box" x="420" y="176" width="190" height="96" rx="9"/>
+  <text class="name" x="436" y="202">Tools</text>
+  <text class="sub" x="436" y="222">execute_code (rs-sdk)</text>
+  <text class="sub" x="436" y="238">world state · notes</text>
+  <text class="sub" x="436" y="254">wiki / learnings search</text>
+
+  <rect class="box" x="210" y="176" width="190" height="96" rx="9"/>
+  <text class="name" x="226" y="202">Metrics</text>
+  <text class="sub" x="226" y="222">XP/h, peak XP/min (15 s)</text>
+  <text class="sub" x="226" y="238">benchmark runs · spend</text>
+  <text class="sub" x="226" y="254">leaderboard rank</text>
+
+  <rect class="box" x="210" y="298" width="400" height="128" rx="9"/>
+  <text class="name" x="226" y="324">Game client supervisor</text>
+  <text class="sub" x="226" y="344">restarts the client if it dies; one of:</text>
+  <rect class="ext" x="226" y="356" width="176" height="54" rx="7"/>
+  <text class="name" x="240" y="378" font-size="13">Lite client</text>
+  <text class="sub" x="240" y="397">headless, ~15 MB</text>
+  <rect class="ext" x="418" y="356" width="176" height="54" rx="7"/>
+  <text class="name" x="432" y="378" font-size="13">Chrome + 3D client</text>
+  <text class="sub" x="432" y="397">streamed to the dashboard</text>
+
+  <!-- External: Claude API -->
+  <rect class="hot" x="680" y="66" width="256" height="84" rx="10"/>
+  <text class="name gold" x="700" y="94">Claude API</text>
+  <text class="sub" x="700" y="114">Opus 5.5 by default; Sonnet,</text>
+  <text class="sub" x="700" y="130">Haiku or Fable per setting</text>
+
+  <!-- External: game server -->
+  <rect class="group" x="680" y="176" width="256" height="250" rx="12"/>
+  <text class="title" x="700" y="202">RS-SDK-DEMO.FLY.DEV</text>
+  <rect class="box" x="700" y="216" width="216" height="52" rx="8"/>
+  <text class="name" x="716" y="238">Gateway</text>
+  <text class="sub" x="716" y="256">pairs SDK ↔ game client</text>
+  <rect class="box" x="700" y="282" width="216" height="52" rx="8"/>
+  <text class="name" x="716" y="304">Game server</text>
+  <text class="sub" x="716" y="322">LostCity engine (2004-era)</text>
+  <rect class="box" x="700" y="348" width="216" height="58" rx="8"/>
+  <text class="name" x="716" y="370">Hiscores</text>
+  <text class="sub" x="716" y="389">rank read by Metrics</text>
+
+  <!-- Arrows -->
+  <path class="line" d="M154,229 C175,229 180,108 208,108" marker-end="url(#arrow)" marker-start="url(#arrow)"/>
+  <text class="label" x="122" y="176" text-anchor="middle">HTTPS</text>
+
+  <path class="line-gold" d="M610,100 L678,100" marker-end="url(#arrow-gold)" marker-start="url(#arrow-gold)"/>
+
+  <path class="line" d="M515,150 L515,174" marker-end="url(#arrow)"/>
+  <path class="line" d="M610,232 L698,242" marker-end="url(#arrow)" marker-start="url(#arrow)"/>
+  <text class="label" x="622" y="226">SDK</text>
+
+  <path class="line" d="M594,383 C650,383 660,250 698,250" marker-end="url(#arrow)"/>
+  <path class="line" d="M594,394 C660,394 670,308 698,308" marker-end="url(#arrow)"/>
+  <text class="label" x="808" y="444" text-anchor="middle">client: game protocol + state to the gateway</text>
+
+</svg>
