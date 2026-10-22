@@ -130,6 +130,14 @@ docker compose up -d --build
 
 The compose file publishes the dashboard on the host's loopback only (use the SSH tunnel above or a reverse proxy) and keeps `data/` in `./data`.
 
+### Your own rs-sdk server
+
+To play on a self-hosted rs-sdk server instead of the demo server, put its address and the game's web port in **Settings → Server**, for example `192.168.1.20:8888` (or `localhost` if it runs on the same machine).
+- **Server type** on *Auto* treats private IP addresses, `.local`/`.lan` names and bare host names as LAN servers, reached over plain HTTP. Pick *LAN* or *Public* to override.
+- Only that one port has to be reachable from OSRSBot: the SDK reaches the gateway through the server's own `/gateway` relay, so the gateway itself can stay bound to localhost. To connect to a gateway port directly, set **Gateway URL** (for example `ws://192.168.1.20:7780`).
+- rs-sdk's lite client only talks plain HTTP to localhost, so for a LAN server OSRSBot routes it through a small loopback forward automatically. The browser client connects directly.
+- The game client OSRSBot runs comes from the rs-sdk version `bun run setup` installed. If your server runs a different rs-sdk version and rejects the client (the client pill shows `outdated`), check out the matching rs-sdk version in `vendor/rs-sdk` and rerun `bun install` in it and in `vendor/rs-sdk/server/webclient`.
+
 ### Other Linux without Docker
 
 Same as the Arch steps, with your distro's packages (on Debian/Ubuntu, `apt install chromium` and install Bun from https://bun.sh), and `ExecStart` pointed at `which bun`.
@@ -167,6 +175,7 @@ src/
   index.ts     entry point, wiring, shutdown
   config.ts    env + dashboard-editable settings (data/settings.json)
   bot.ts       credentials, bot.env for rs-sdk, the SDK control connection
+  lan-forward.ts loopback TCP forward so the lite client can reach a LAN server
   client.ts    game client supervisor (lite runner / headless Chrome + screencast)
   agent.ts     session loop: kickoff, tool calls, error handling, budget
   llm/         providers behind one interface: openrouter.ts (streaming, routing,

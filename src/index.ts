@@ -24,7 +24,7 @@ async function bringUpClient(): Promise<void> {
 
 // Changing the account, server or client type needs a fresh client and SDK connection.
 onSettingsChange(changed => {
-    const clientKeys = ['botName', 'server', 'clientMode', 'showChat'] as const;
+    const clientKeys = ['botName', 'server', 'serverMode', 'gatewayUrl', 'clientMode', 'showChat'] as const;
     if (clientKeys.some(k => k in changed)) {
         emit('client', `Settings changed (${Object.keys(changed).join(', ')}): reconnecting`);
         const wasRunning = gameClient.status !== 'stopped';

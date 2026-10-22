@@ -11,8 +11,9 @@
 import { join } from 'node:path';
 import type { Subprocess } from 'bun';
 import type { Browser, CDPSession, Page } from 'puppeteer';
-import { env, serverOrigin, settings, type ClientMode } from './config';
+import { env, isLanServer, isLocalServer, serverHostPort, serverOrigin, settings, type ClientMode } from './config';
 import { passwordFor, writeBotEnv } from './bot';
+import { lanForward } from './lan-forward';
 import { emit } from './events';
 
 export type ClientStatus = 'stopped' | 'starting' | 'running' | 'backoff' | 'outdated' | 'error';
@@ -112,7 +113,10 @@ class GameClient {
         this.setStatus('starting');
         this.startedAt = Date.now();
         try {
-            writeBotEnv();
+            // rs-sdk's lite client only speaks plain HTTP to localhost, so reach a LAN server through a loopback forward.
+            const viaForward = this.mode === 'lite' && isLanServer() && !isLocalServer();
+            writeBotEnv(viaForward ? lanForward.start(serverHostPort()) : undefined);
+            if (viaForward) this.appendLog(`LAN server: lite client goes through a local forward to ${serverHostPort()}`);
             if (this.mode === 'lite') this.launchLite(gen);
             else await this.launchBrowser(gen);
         } catch (error) {

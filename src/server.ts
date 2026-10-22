@@ -11,9 +11,9 @@ import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { ServerWebSocket } from 'bun';
 import { agent, providers } from './agent';
-import { botLink } from './bot';
+import { botLink, gatewayUrl } from './bot';
 import { gameClient } from './client';
-import { activeModel, env, settings, updateSettings, type Settings } from './config';
+import { activeModel, env, isLanServer, serverOrigin, settings, updateSettings, type Settings } from './config';
 import { ANTHROPIC_MODELS } from './llm/anthropic';
 import { endpoints, finishOAuth, keyInfo, keySource, models, modelsForKey, openrouterKey, saveKey, startOAuth, validateKey } from './openrouter';
 import { emit, recentEvents, subscribe } from './events';
@@ -98,6 +98,9 @@ export function statusSnapshot() {
             gateway: botLink.sdk?.getConnectionState() ?? 'disconnected',
             stateAgeMs: botLink.sdk?.getState() ? botLink.sdk.getStateAge() : null,
             inGame: botLink.isLive(),
+            serverKind: isLanServer() ? 'lan' : 'public',
+            origin: serverOrigin(),
+            gatewayUrl: gatewayUrl(),
         },
         metrics: metrics.snapshot(),
         llm: {

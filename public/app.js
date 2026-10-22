@@ -118,6 +118,9 @@ function renderStatus(s) {
 
   fillSettingsOnce(settings);
   renderModelCard();
+  $('#server-effective').textContent = client.origin
+    ? `Connecting to ${client.origin} as a ${client.serverKind === 'lan' ? 'LAN / self-hosted server (plain HTTP)' : 'public server (HTTPS)'}; gateway ${client.gatewayUrl}`
+    : '';
 }
 
 let settingsFilled = false;

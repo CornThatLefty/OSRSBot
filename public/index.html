@@ -251,7 +251,15 @@
       <h2>Settings</h2>
       <form id="settings-form" class="form">
         <label>Bot name <input name="botName" maxlength="12" pattern="[A-Za-z0-9]{1,12}" placeholder="max 12 letters/digits"></label>
-        <label>Server <input name="server" placeholder="rs-sdk-demo.fly.dev"></label>
+        <label>Server <input name="server" placeholder="rs-sdk-demo.fly.dev or 192.168.1.20:8888"></label>
+        <label>Server type
+          <select name="serverMode">
+            <option value="auto">Auto (from the address)</option>
+            <option value="public">Public (HTTPS)</option>
+            <option value="lan">LAN or this machine (HTTP)</option>
+          </select></label>
+        <label class="wide">Gateway URL (optional) <input name="gatewayUrl" placeholder="blank = the server's own /gateway relay"></label>
+        <p id="server-effective" class="muted small-text wide"></p>
         <label>Client mode
           <select name="clientMode"><option value="lite">Lite (headless, cheap)</option><option value="browser">Browser (3D view)</option></select></label>
         <label>Tool calls per session <input name="maxTurnsPerSession" type="number" min="5" max="200"></label>
@@ -263,6 +271,7 @@
         <span id="settings-msg" class="muted"></span>
       </form>
       <p class="muted small-text">Changing bot name, server, client mode or chat restarts the game client. A new bot name creates a new account on first login; its password is in <code>data/credentials.json</code>.</p>
+      <p class="muted small-text">Self-hosted rs-sdk server on your network: enter its address with the game's web port (for example <code>192.168.1.20:8888</code>). Only that port has to be reachable; the gateway is reached through the server's <code>/gateway</code> relay, so it can stay bound to localhost there.</p>
     </div>
 
     <div class="card">

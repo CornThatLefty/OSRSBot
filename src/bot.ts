@@ -9,7 +9,7 @@ import { join } from 'node:path';
 import { BotSDK, deriveGatewayUrl, forgetDirectGateway } from '../vendor/rs-sdk/sdk/index';
 import { BotActions } from '../vendor/rs-sdk/sdk/actions';
 import type { BotConnection } from '../vendor/rs-sdk/mcp/api/index';
-import { env, isLocalServer, settings } from './config';
+import { env, isLanServer, isLocalServer, serverHostPort, settings } from './config';
 import { emit } from './events';
 
 const credentialsPath = join(env.dataDir, 'credentials.json');
@@ -37,20 +37,30 @@ export function passwordFor(name: string): string {
 }
 
 export function gatewayUrl(): string {
-    return isLocalServer() ? `ws://${settings.server.split(':')[0]}:7780` : deriveGatewayUrl(settings.server);
+    if (settings.gatewayUrl) return settings.gatewayUrl;
+    // On this machine rs-sdk's tools talk to the gateway's own port.
+    if (isLocalServer()) return `ws://${settings.server.split(':')[0]}:7780`;
+    // Elsewhere on the LAN, go through the game server's /gateway relay: only its web port has to be reachable.
+    if (isLanServer()) return `ws://${serverHostPort()}/gateway`;
+    return deriveGatewayUrl(settings.server);
 }
 
-/** Write vendor/rs-sdk/bots/<name>/bot.env in the format rs-sdk's tools expect. */
-export function writeBotEnv(): void {
+/**
+ * Write vendor/rs-sdk/bots/<name>/bot.env in the format rs-sdk's tools expect.
+ * `liteHost` replaces the game server address for the lite client (see lan-forward.ts).
+ */
+export function writeBotEnv(liteHost?: string): void {
     const name = settings.botName;
     const dir = join(env.rsSdkDir, 'bots', name);
     mkdirSync(dir, { recursive: true });
+    const lan = isLanServer();
     const lines = [
         `BOT_USERNAME=${name}`,
         `PASSWORD=${passwordFor(name)}`,
-        // The lite runner builds its cache origin from SERVER, so a local server needs the web port spelled out.
-        `SERVER=${isLocalServer() && !settings.server.includes(':') ? settings.server + ':8888' : settings.server}`,
-        ...(isLocalServer() ? [`GATEWAY_URL=${gatewayUrl()}`] : []),
+        // The lite runner builds its cache origin from SERVER, so a self-hosted server needs the web port spelled out.
+        `SERVER=${liteHost ?? (lan ? serverHostPort() : settings.server)}`,
+        // SERVER doubles as the gateway address in rs-sdk's tools unless GATEWAY_URL says otherwise.
+        ...(lan || settings.gatewayUrl ? [`GATEWAY_URL=${gatewayUrl()}`] : []),
         `SHOW_CHAT=${settings.showChat}`,
         'TELEMETRY=false',
     ];

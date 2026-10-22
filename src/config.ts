@@ -24,8 +24,12 @@ export const EFFORTS: Effort[] = ['low', 'medium', 'high', 'xhigh', 'max'];
 export interface Settings {
     /** In-game username, max 12 alphanumeric characters. */
     botName: string;
-    /** Game server host. rs-sdk-demo.fly.dev is the public server with the leaderboard. */
+    /** Game server host[:port]. rs-sdk-demo.fly.dev is the public server with the leaderboard. */
     server: string;
+    /** 'lan' = self-hosted server over plain HTTP (this machine or the local network); 'public' = HTTPS; 'auto' = from the address. */
+    serverMode: 'auto' | 'public' | 'lan';
+    /** Optional gateway WebSocket URL. Empty = the game server's own /gateway relay (or :7780 on localhost). */
+    gatewayUrl: string;
     /** 'lite' = headless client (cheap). 'browser' = real 3D client in headless Chrome, streamable to the dashboard. */
     clientMode: ClientMode;
     /** Let the agent see other players' chat. Off by default: chat is a prompt-injection channel. */
@@ -64,6 +68,8 @@ export interface Settings {
 export const defaultSettings: Settings = {
     botName: '',
     server: 'rs-sdk-demo.fly.dev',
+    serverMode: 'auto',
+    gatewayUrl: '',
     clientMode: 'lite',
     showChat: false,
     provider: 'openrouter',
@@ -123,7 +129,11 @@ export function updateSettings(patch: Partial<Settings>): Settings {
     if (!['openrouter', 'anthropic'].includes(next.provider)) throw new Error('provider must be openrouter or anthropic');
     if (!['', 'price', 'throughput', 'latency', 'exacto'].includes(next.providerSort)) throw new Error('providerSort must be price, throughput, latency, exacto or empty');
     if (!['account', 'allow', 'deny'].includes(next.dataCollection)) throw new Error('dataCollection must be account, allow or deny');
-    if (!/^[a-zA-Z0-9.:-]+$/.test(next.server)) throw new Error('Server must be a host name, optionally with :port');
+    next.server = next.server.trim().replace(/^[a-z]+:\/\//i, '').replace(/\/+$/, '');
+    if (!/^[a-zA-Z0-9.-]+(:\d{1,5})?$/.test(next.server)) throw new Error('Server must be a host name or IP address, optionally with :port');
+    if (!['auto', 'public', 'lan'].includes(next.serverMode)) throw new Error('serverMode must be auto, public or lan');
+    next.gatewayUrl = next.gatewayUrl.trim();
+    if (next.gatewayUrl && !/^wss?:\/\/[^\s/]+(\/\S*)?$/.test(next.gatewayUrl)) throw new Error('Gateway URL must start with ws:// or wss://');
     const modelId = /^[a-zA-Z0-9._~:/-]{1,120}$/;
     if (!modelId.test(next.openrouterModel)) throw new Error('OpenRouter model must be a model id like openrouter/free');
     next.openrouterFallbacks = [...new Set(next.openrouterFallbacks.map(m => m.trim()).filter(Boolean))].slice(0, 3);
@@ -151,12 +161,39 @@ export function activeModel(): string {
     return settings.provider === 'openrouter' ? settings.openrouterModel : settings.anthropicModel;
 }
 
+/** This machine. rs-sdk's own tools treat these specially (direct gateway on :7780). */
 export function isLocalServer(server = settings.server): boolean {
     return server.startsWith('localhost') || server.startsWith('127.');
 }
 
-/** Public web origin of the game server (hiscores, /bot client page). */
-export function serverOrigin(server = settings.server): string {
-    if (isLocalServer(server)) return `http://${server.includes(':') ? server : server + ':8888'}`;
-    return `https://${server}`;
+/** Addresses that are almost certainly on the local network: private IPv4 ranges, mDNS/home names, bare host names. */
+export function looksLikeLan(server: string): boolean {
+    const host = server.replace(/:\d+$/, '').toLowerCase();
+    if (isLocalServer(host)) return true;
+    const ip = host.match(/^(\d+)\.(\d+)\.\d+\.\d+$/);
+    if (ip) {
+        const [a, b] = [Number(ip[1]), Number(ip[2])];
+        return a === 10 || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168) || (a === 169 && b === 254) || (a === 100 && b >= 64 && b <= 127);
+    }
+    return !host.includes('.') || /\.(local|lan|home|internal|home\.arpa)$/.test(host);
+}
+
+/**
+ * A self-hosted rs-sdk server reached over plain HTTP (this machine or the LAN), as opposed to a public
+ * server behind HTTPS like the demo server. 'auto' decides from the address.
+ */
+export function isLanServer(): boolean {
+    if (settings.serverMode === 'lan') return true;
+    if (settings.serverMode === 'public') return false;
+    return looksLikeLan(settings.server);
+}
+
+/** host:port of the game server's web port (rs-sdk engines default to 8888 when no port is given on a LAN). */
+export function serverHostPort(): string {
+    return isLanServer() && !/:\d+$/.test(settings.server) ? `${settings.server}:8888` : settings.server;
+}
+
+/** Web origin of the game server (hiscores, /bot client page, cache). */
+export function serverOrigin(): string {
+    return isLanServer() ? `http://${serverHostPort()}` : `https://${settings.server}`;
 }
