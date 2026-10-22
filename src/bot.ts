@@ -73,10 +73,34 @@ class BotLink {
      */
     isLive(): boolean {
         const sdk = this.sdk;
-        return !!sdk?.getState()?.inGame && sdk.getStateAge() < 10_000;
+        // A replayed state never advances, so require a tick change seen recently (as rs-sdk's runner does).
+        return !!sdk?.getState()?.inGame && Date.now() - this.lastTickAdvanceAt < 10_000;
+    }
+
+    private lastTick: number | null = null;
+    private lastTickAdvanceAt = 0;
+
+    private trackTicks(sdk: BotSDK): void {
+        this.lastTick = null;
+        this.lastTickAdvanceAt = 0;
+        sdk.onStateUpdate(state => {
+            if (this.sdk !== sdk) return;
+            if (this.lastTick !== null && state.tick !== this.lastTick) this.lastTickAdvanceAt = Date.now();
+            this.lastTick = state.tick;
+        });
+    }
+
+    /** Set when another controller took the bot over; the watchdog then leaves it alone until an explicit connect. */
+    preempted = false;
+
+    /** Watchdog entry point: reconnect after a failed or dropped connection, but never fight another controller. */
+    async reconnectIfIdle(): Promise<void> {
+        if (this.connection || this.connecting || this.preempted || !settings.botName) return;
+        await this.connect().catch(error => emit('client', `SDK reconnect failed: ${error instanceof Error ? error.message : error}; retrying`));
     }
 
     async connect(): Promise<BotConnection> {
+        this.preempted = false;
         if (this.connection) return this.connection;
         if (this.connecting) return this.connecting;
         this.connecting = this.open().finally(() => { this.connecting = null; });
@@ -132,11 +156,13 @@ class BotLink {
             // client start or agent step opens a fresh one instead of using a dead one forever.
             if (state === 'disconnected' && this.connection === connection) {
                 this.connection = null;
+                this.preempted = true;
                 connection.unsubscribeConnectionState?.();
                 emit('client', 'SDK connection closed (another controller may have taken over the bot); it reconnects on the next client start or agent step');
             }
         });
         this.connection = connection;
+        this.trackTicks(sdk);
         for (const fn of this.readyListeners) fn(sdk);
         emit('client', `SDK connected to gateway as ${name}`);
         return connection;

@@ -77,7 +77,9 @@ function renderStatus(s) {
   const budget = settings.dailyBudgetUsd ? ` / $${settings.dailyBudgetUsd}` : '';
   pill('#pill-spend', `$${m.spendToday.toFixed(2)}${budget} today`, settings.dailyBudgetUsd && m.spendToday >= settings.dailyBudgetUsd ? 'bad' : '');
 
-  $('#agent-detail').textContent = agent.detail || '';
+  const llm = s.llm;
+  const using = `${llm.provider === 'openrouter' ? 'OpenRouter' : 'Claude API'} · ${llm.model}${llm.sessionModel && llm.sessionModel !== llm.model && agent.status === 'running' ? ` (this session: ${llm.sessionModel})` : ''}`;
+  $('#agent-detail').textContent = [using, llm.unavailable, agent.detail].filter(Boolean).join(' · ');
   $('#btn-agent-start').textContent = agent.status === 'paused' ? 'Resume' : 'Start';
 
   // current tool
@@ -115,6 +117,7 @@ function renderStatus(s) {
   if (activeView === 'client3d') ensureViewSocket();
 
   fillSettingsOnce(settings);
+  renderModelCard();
 }
 
 let settingsFilled = false;
@@ -525,6 +528,307 @@ async function loadClientLog() {
   } catch { /* ignore */ }
 }
 
+// ---- AI model card --------------------------------------------------------------------------
+
+let orModels = null;      // tool-capable OpenRouter models
+let orAvailable = null;   // Set of ids this key may use (privacy settings), or null if unknown
+let orAccount = null;
+let anthropicModels = null;
+let modelKeyLast = '';
+let orFormDirty = false;
+
+const fmtPrice = n => (n >= 10 ? n.toFixed(0) : n >= 1 ? n.toFixed(2) : n >= 0.1 ? n.toFixed(2) : n.toFixed(3));
+const ctxText = n => (!n ? '?' : n >= 1e6 ? `${+(n / 1e6).toFixed(1)}M` : `${Math.round(n / 1000)}k`);
+const usd = n => (n == null ? '–' : `$${n < 1 ? n.toFixed(3) : n.toFixed(2)}`);
+
+function modelTags(m) {
+  const tags = [];
+  const tag = (text, cls) => tags.push(el('span', `tag ${cls || ''}`, text));
+  if (m.free) tag('free', 'free');
+  else if (m.promptPrice < 0) tag('variable price', 'price');
+  else tag(`$${fmtPrice(m.promptPrice)} in · $${fmtPrice(m.completionPrice)} out /M`, 'price');
+  tag(`${ctxText(m.contextLength)} context`);
+  if (m.reasoning) tag(m.efforts.length ? `reasoning: ${m.efforts.join('/')}` : 'reasoning', 'reason');
+  if (orAvailable && !orAvailable.has(m.id)) tag('blocked by your privacy settings', 'blocked');
+  if (m.expires) tag(`retiring ${m.expires}`, 'blocked');
+  return tags;
+}
+
+async function loadModels(force) {
+  try {
+    const r = await api('/api/openrouter/models' + (force ? '?refresh=1' : ''));
+    orModels = r.models.filter(m => m.tools);
+    orAvailable = r.availableIds ? new Set(r.availableIds) : null;
+    $('#or-f-usable-wrap').hidden = !orAvailable;
+    renderModelCard(true);
+    renderModelList();
+  } catch (err) { toast(err); }
+}
+
+async function loadAccount(force) {
+  try {
+    orAccount = await api('/api/openrouter/account' + (force ? '?refresh=1' : ''));
+    renderAccount();
+  } catch { /* shown as not connected */ }
+}
+
+function renderAccount() {
+  const a = orAccount;
+  const box = $('#or-account');
+  box.replaceChildren();
+  const actions = el('div', 'actions');
+  const btn = (text, fn, cls) => { const b = el('button', `small ${cls || ''}`, text); b.type = 'button'; b.addEventListener('click', fn); actions.append(b); };
+  if (!a?.hasKey) {
+    box.append(el('div', null, 'Not connected to OpenRouter. Connect your account (a key is created for you) or paste an existing key. Free models need no credits.'));
+    btn('Connect OpenRouter', connectOpenRouter, 'primary');
+    btn('Paste a key', () => showKeyForm(true));
+    box.append(actions);
+    return;
+  }
+  const info = a.info || {};
+  const head = el('div', 'row');
+  const who = el('span');
+  who.append(el('b', null, 'OpenRouter connected'), ` · key ${a.keyHint}${info.label ? ` (${info.label})` : ''} · from ${a.keySource === 'env' ? '.env' : 'dashboard'}`);
+  head.append(who);
+  box.append(head);
+  if (info.error) box.append(el('div', 'muted', `Key check: ${info.error}`));
+  else {
+    const limit = info.limit == null ? 'no spending limit on this key' : `${usd(info.limitRemaining)} of ${usd(info.limit)} key limit left${info.limitReset ? ` (resets ${info.limitReset})` : ''}`;
+    box.append(el('div', 'muted', `Spent today ${usd(info.usageDaily ?? 0)} · this month ${usd(info.usageMonthly ?? info.usage)} · ${limit}`));
+    const fd = info.freeDaily;
+    if (fd) {
+      const pct = Math.min(100, (fd.used / Math.max(1, fd.limit)) * 100);
+      const line = el('div', 'muted', `Free-model requests today: ${fd.used} / ${fd.limit} (resets at midnight UTC)${fd.limit <= 50 ? ' · buying 10+ credits raises this to 1000/day' : ''}`);
+      const meter = el('div', `meter ${pct >= 100 ? 'bad' : pct >= 80 ? 'warn' : ''}`);
+      const bar = el('span'); bar.style.width = `${pct}%`; meter.append(bar);
+      box.append(line, meter);
+    } else {
+      box.append(el('div', 'muted', `Free-model requests today (counted here): ${a.freeRequestsToday}`));
+    }
+  }
+  btn('↻', () => loadAccount(true));
+  btn('Change key', () => showKeyForm(true));
+  if (a.keySource === 'dashboard') btn('Disconnect', async () => {
+    if (!confirm('Remove the saved OpenRouter key from this server?')) return;
+    try { orAccount = await api('/api/openrouter/key', { key: '' }); renderAccount(); loadModels(true); } catch (err) { toast(err); }
+  }, 'danger');
+  box.append(actions);
+}
+
+function showKeyForm(show) {
+  $('#or-key-form').hidden = !show;
+  if (show) $('#or-key-input').focus();
+}
+
+async function connectOpenRouter() {
+  try {
+    const { url } = await api('/api/openrouter/connect', {});
+    location.href = url;
+  } catch (err) { toast(err); }
+}
+
+$('#or-key-save').addEventListener('click', async () => {
+  const input = $('#or-key-input');
+  try {
+    orAccount = await api('/api/openrouter/key', { key: input.value });
+    input.value = '';
+    showKeyForm(false);
+    renderAccount();
+    loadModels(true);
+  } catch (err) { toast(err); }
+});
+$('#or-key-cancel').addEventListener('click', () => showKeyForm(false));
+
+/** Back from openrouter.ai/auth: trade the code for a key, then clean the URL. */
+async function finishOpenRouterLogin() {
+  const params = new URLSearchParams(location.search);
+  const code = params.get('code');
+  const state = params.get('or_state');
+  if (!code || !state) return;
+  history.replaceState(null, '', location.pathname);
+  try {
+    orAccount = await api('/api/openrouter/exchange', { code, state });
+    renderAccount();
+    loadModels(true);
+  } catch (err) { toast(err); }
+}
+
+function currentOrModel() {
+  const id = status?.settings.openrouterModel;
+  return orModels?.find(m => m.id === id) || null;
+}
+
+/** Re-render when the model-related settings change (from this tab or another). */
+function renderModelCard(force) {
+  if (!status) return;
+  const s = status.settings;
+  const key = JSON.stringify([s.provider, s.openrouterModel, s.openrouterFallbacks, s.anthropicModel, s.effort, s.providerSort, s.dataCollection, s.maxPromptPrice, s.maxCompletionPrice, s.maxOutputTokens, !!orModels]);
+  if (!force && key === modelKeyLast) return;
+  modelKeyLast = key;
+
+  document.querySelectorAll('.provider-tab').forEach(t => t.classList.toggle('active', t.dataset.provider === s.provider));
+  $('#or-panel').hidden = s.provider !== 'openrouter';
+  $('#an-panel').hidden = s.provider !== 'anthropic';
+
+  // OpenRouter: current model
+  const m = currentOrModel();
+  $('#or-model-name').textContent = m ? m.name : s.openrouterModel;
+  $('#or-model-id').textContent = s.openrouterModel;
+  $('#or-model-tags').replaceChildren(...(m ? modelTags(m) : [el('span', 'tag', orModels ? 'not in the catalog (check the id)' : 'loading…')]));
+
+  // Fallbacks
+  $('#or-fallbacks').replaceChildren(...(s.openrouterFallbacks.length ? s.openrouterFallbacks.map(id => {
+    const chip = el('span', 'chip', id);
+    const x = el('button', null, '×');
+    x.type = 'button';
+    x.title = 'Remove fallback';
+    x.addEventListener('click', () => saveSettings({ openrouterFallbacks: s.openrouterFallbacks.filter(f => f !== id) }));
+    chip.append(x);
+    return chip;
+  }) : [el('span', 'muted small-text', 'none (add with + fallback in the model list)')]));
+
+  // Effort choices follow the model
+  const effortSel = $('#or-effort');
+  const efforts = m?.reasoning ? (m.efforts.length ? m.efforts : ['low', 'medium', 'high', 'xhigh', 'max']) : [];
+  effortSel.replaceChildren(...(efforts.length
+    ? ['low', 'medium', 'high', 'xhigh', 'max'].filter(e => efforts.includes(e)).map(e => { const o = el('option', null, e); o.value = e; return o; })
+    : [Object.assign(el('option', null, m ? 'no reasoning on this model' : 'high'), { value: s.effort })]));
+  effortSel.disabled = !!m && !m.reasoning;
+  effortSel.value = efforts.includes(s.effort) ? s.effort : (m?.defaultEffort && efforts.includes(m.defaultEffort) ? m.defaultEffort : efforts[efforts.length - 1] || s.effort);
+
+  if (!orFormDirty) {
+    const f = $('#or-form');
+    for (const name of ['maxOutputTokens', 'providerSort', 'dataCollection', 'maxPromptPrice', 'maxCompletionPrice']) f.elements.namedItem(name).value = s[name];
+  }
+
+  // Claude API panel
+  if (anthropicModels) {
+    const sel = $('#an-model');
+    if (sel.options.length !== anthropicModels.length) sel.replaceChildren(...anthropicModels.map(id => Object.assign(el('option', null, id), { value: id })));
+    sel.value = s.anthropicModel;
+    $('#an-form').elements.namedItem('effort').value = s.effort;
+  }
+
+  renderModelList();
+  if ($('#or-endpoints-details').open) loadEndpoints();
+}
+
+function renderModelList() {
+  if ($('#or-picker').hidden || !orModels || !status) return;
+  const q = $('#or-search').value.trim().toLowerCase();
+  const onlyFree = $('#or-f-free').checked;
+  const onlyReasoning = $('#or-f-reasoning').checked;
+  const onlyUsable = orAvailable && $('#or-f-usable').checked;
+  const sort = $('#or-sort').value;
+  const s = status.settings;
+  let list = orModels.filter(m =>
+    (!q || m.id.toLowerCase().includes(q) || m.name.toLowerCase().includes(q)) &&
+    (!onlyFree || m.free) && (!onlyReasoning || m.reasoning) && (!onlyUsable || orAvailable.has(m.id)));
+  const price = m => (m.promptPrice < 0 ? Infinity : m.promptPrice + m.completionPrice);
+  list.sort(sort === 'newest' ? (a, b) => b.created - a.created
+    : sort === 'price' ? (a, b) => price(a) - price(b) || b.created - a.created
+    : sort === 'context' ? (a, b) => b.contextLength - a.contextLength
+    : (a, b) => (b.free - a.free) || (b.id === 'openrouter/free') - (a.id === 'openrouter/free') || b.created - a.created);
+  const shown = list.slice(0, 150);
+  const rows = shown.map(m => {
+    const row = el('div', `model-row${m.id === s.openrouterModel ? ' selected' : ''}${orAvailable && !orAvailable.has(m.id) ? ' blocked' : ''}`);
+    row.title = m.description;
+    const main = el('div', 'mr-main');
+    main.append(el('div', 'mr-name', m.name), el('code', null, m.id));
+    const tags = el('div', 'tags'); tags.append(...modelTags(m)); main.append(tags);
+    const side = el('div', 'mr-side');
+    const fb = el('button', 'small', '+ fallback');
+    fb.type = 'button';
+    fb.disabled = m.id === s.openrouterModel || s.openrouterFallbacks.includes(m.id) || s.openrouterFallbacks.length >= 3;
+    fb.addEventListener('click', e => { e.stopPropagation(); saveSettings({ openrouterFallbacks: [...s.openrouterFallbacks, m.id] }); });
+    side.append(fb);
+    row.append(main, side);
+    row.addEventListener('click', () => saveSettings({ openrouterModel: m.id }));
+    return row;
+  });
+  if (list.length > shown.length) rows.push(el('div', 'muted small-text', `${list.length - shown.length} more: refine the search.`));
+  if (!list.length) rows.push(el('div', 'muted small-text', 'No models match.'));
+  $('#or-model-list').replaceChildren(...rows);
+}
+
+async function loadEndpoints() {
+  const id = status?.settings.openrouterModel;
+  const tbody = $('#or-endpoints tbody');
+  if (!id || id.startsWith('openrouter/')) {
+    tbody.replaceChildren(el('tr', null, ''));
+    tbody.firstChild.append(Object.assign(el('td', 'muted', 'Routers pick a model per request, so there is no fixed provider list.'), { colSpan: 6 }));
+    return;
+  }
+  try {
+    const eps = await api(`/api/openrouter/endpoints?model=${encodeURIComponent(id)}`);
+    tbody.replaceChildren(...eps.map(e => {
+      const tr = el('tr');
+      tr.append(
+        el('td', null, `${e.provider}${e.quantization && e.quantization !== 'unknown' ? ` (${e.quantization})` : ''}${e.tools ? '' : ' · no tools'}`),
+        el('td', null, e.promptPrice === 0 && e.completionPrice === 0 ? 'free' : `$${fmtPrice(e.promptPrice)} / $${fmtPrice(e.completionPrice)}`),
+        el('td', null, ctxText(e.contextLength)),
+        el('td', null, e.uptime30m == null ? '–' : `${Math.round(e.uptime30m)}%`),
+        el('td', null, e.latencyP50 == null ? '–' : `${(e.latencyP50 / 1000).toFixed(1)}s`),
+        el('td', null, e.throughputP50 == null ? '–' : Math.round(e.throughputP50)));
+      return tr;
+    }));
+  } catch (err) {
+    tbody.replaceChildren(el('tr'));
+    tbody.firstChild.append(Object.assign(el('td', 'muted', err.message), { colSpan: 6 }));
+  }
+}
+
+async function saveSettings(patch, msgEl) {
+  try {
+    const { settings } = await api('/api/settings', patch);
+    status.settings = settings;
+    renderModelCard();
+    if (msgEl) { msgEl.textContent = 'Saved: applies from the next session'; setTimeout(() => { msgEl.textContent = ''; }, 3000); }
+    return true;
+  } catch (err) {
+    if (msgEl) msgEl.textContent = err.message; else toast(err);
+    return false;
+  }
+}
+
+document.querySelectorAll('.provider-tab').forEach(tab => tab.addEventListener('click', () => saveSettings({ provider: tab.dataset.provider })));
+$('#or-browse').addEventListener('click', () => {
+  const picker = $('#or-picker');
+  picker.hidden = !picker.hidden;
+  $('#or-browse').textContent = picker.hidden ? 'Browse models' : 'Close';
+  if (!picker.hidden) { renderModelList(); $('#or-search').focus(); }
+});
+for (const id of ['#or-search', '#or-sort', '#or-f-free', '#or-f-reasoning', '#or-f-usable']) $(id).addEventListener('input', renderModelList);
+$('#or-refresh').addEventListener('click', () => loadModels(true));
+$('#or-endpoints-details').addEventListener('toggle', e => { if (e.target.open) loadEndpoints(); });
+$('#or-form').addEventListener('input', () => { orFormDirty = true; });
+
+function orFormPatch() {
+  const f = $('#or-form');
+  const patch = {
+    maxOutputTokens: Number(f.elements.namedItem('maxOutputTokens').value),
+    providerSort: f.elements.namedItem('providerSort').value,
+    dataCollection: f.elements.namedItem('dataCollection').value,
+    maxPromptPrice: Number(f.elements.namedItem('maxPromptPrice').value) || 0,
+    maxCompletionPrice: Number(f.elements.namedItem('maxCompletionPrice').value) || 0,
+  };
+  if (!$('#or-effort').disabled) patch.effort = $('#or-effort').value;
+  return patch;
+}
+$('#or-form').addEventListener('submit', async e => {
+  e.preventDefault();
+  if (await saveSettings(orFormPatch(), $('#or-msg'))) orFormDirty = false;
+});
+$('#or-apply-now').addEventListener('click', async () => {
+  if (await saveSettings(orFormPatch(), $('#or-msg'))) { orFormDirty = false; act('/api/agent/new-session')(); }
+});
+function anFormPatch() {
+  const f = $('#an-form');
+  return { anthropicModel: f.elements.namedItem('anthropicModel').value, effort: f.elements.namedItem('effort').value };
+}
+$('#an-form').addEventListener('submit', e => { e.preventDefault(); saveSettings(anFormPatch(), $('#an-msg')); });
+$('#an-apply-now').addEventListener('click', async () => { if (await saveSettings(anFormPatch(), $('#an-msg'))) act('/api/agent/new-session')(); });
+
 // ---- boot -----------------------------------------------------------------------------------
 
 let booted = false;
@@ -535,6 +839,11 @@ async function boot() {
   if (booted) return;
   booted = true;
   for (const ev of await api('/api/events')) addEvent(ev);
+  await finishOpenRouterLogin();
+  api('/api/anthropic/models').then(list => { anthropicModels = list; renderModelCard(true); }).catch(() => {});
+  loadModels();
+  loadAccount();
+  setInterval(() => loadAccount(), 60_000);
   connectStream();
   pollWorld();
   drawChart();

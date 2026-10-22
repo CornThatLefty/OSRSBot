@@ -38,12 +38,12 @@
   <rect class="box" x="210" y="66" width="190" height="84" rx="9"/>
   <text class="name" x="226" y="92">Dashboard</text>
   <text class="sub" x="226" y="112">live feed, radar, 3D view,</text>
-  <text class="sub" x="226" y="128">controls, settings, login</text>
+  <text class="sub" x="226" y="128">model picker, controls</text>
 
   <rect class="hot" x="420" y="66" width="190" height="84" rx="9"/>
-  <text class="name gold" x="436" y="92">Claude agent</text>
+  <text class="name gold" x="436" y="92">AI agent</text>
   <text class="sub" x="436" y="112">sessions with notes,</text>
-  <text class="sub" x="436" y="128">caching, budget cap</text>
+  <text class="sub" x="436" y="128">limits, budget cap</text>
 
   <rect class="box" x="420" y="176" width="190" height="96" rx="9"/>
   <text class="name" x="436" y="202">Tools</text>
@@ -69,9 +69,9 @@
 
   <!-- External: Claude API -->
   <rect class="hot" x="680" y="66" width="256" height="84" rx="10"/>
-  <text class="name gold" x="700" y="94">Claude API</text>
-  <text class="sub" x="700" y="114">Opus 5.5 by default; Sonnet,</text>
-  <text class="sub" x="700" y="130">Haiku or Fable per setting</text>
+  <text class="name gold" x="700" y="94">OpenRouter or Claude API</text>
+  <text class="sub" x="700" y="114">any OpenRouter model, free ones</text>
+  <text class="sub" x="700" y="130">included, or Claude directly</text>
 
   <!-- External: game server -->
   <rect class="group" x="680" y="176" width="256" height="250" rx="12"/>

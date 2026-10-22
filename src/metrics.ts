@@ -12,7 +12,7 @@ import { appendFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { BotSDK, BotWorldState } from '../vendor/rs-sdk/sdk/index';
 import { botLink } from './bot';
-import { env, serverOrigin, settings } from './config';
+import { activeModel, env, serverOrigin, settings } from './config';
 import { broadcast, emit } from './events';
 
 interface Sample {
@@ -53,7 +53,12 @@ export interface BenchRun {
     };
 }
 
-interface DayUsage { usd: number; input: number; output: number; cacheRead: number; cacheWrite: number; requests: number }
+interface DayUsage {
+    usd: number; input: number; output: number; cacheRead: number; cacheWrite: number; requests: number;
+    /** Requests to free OpenRouter models (they count against a daily quota). */
+    freeRequests?: number;
+    byModel?: Record<string, { requests: number; usd: number; input: number; output: number }>;
+}
 
 const PEAK_WINDOW_MS = 15_000;
 const KEEP_MS = 24 * 3600_000;
@@ -199,7 +204,7 @@ class Metrics {
             id: now.toString(36),
             label: label || `Run ${this.runs.length + 1}`,
             goal,
-            model: settings.model,
+            model: `${settings.provider}:${activeModel()}`,
             effort: settings.effort,
             status: 'running',
             startedAt: now,
@@ -253,7 +258,7 @@ class Metrics {
 
     // ---- API spend -------------------------------------------------------------------------
 
-    addUsage(usd: number, u: { input: number; output: number; cacheRead: number; cacheWrite: number }): void {
+    addUsage(usd: number, u: { input: number; output: number; cacheRead: number; cacheWrite: number }, by: { provider: string; model: string }): void {
         const day = (this.usage[today()] ??= { usd: 0, input: 0, output: 0, cacheRead: 0, cacheWrite: 0, requests: 0 });
         day.usd += usd;
         day.input += u.input;
@@ -261,7 +266,18 @@ class Metrics {
         day.cacheRead += u.cacheRead;
         day.cacheWrite += u.cacheWrite;
         day.requests++;
+        // OpenRouter's daily free-model quota counts requests to free models (cost 0).
+        if (by.provider === 'openrouter' && usd === 0) day.freeRequests = (day.freeRequests ?? 0) + 1;
+        const m = ((day.byModel ??= {})[by.model || 'unknown'] ??= { requests: 0, usd: 0, input: 0, output: 0 });
+        m.requests++;
+        m.usd += usd;
+        m.input += u.input;
+        m.output += u.output;
         writeFileSync(usagePath, JSON.stringify(this.usage, null, 2));
+    }
+
+    freeRequestsToday(): number {
+        return this.usage[today()]?.freeRequests ?? 0;
     }
 
     spendToday(): number {

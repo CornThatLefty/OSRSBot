@@ -3,16 +3,14 @@
 
 import { existsSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
 import { isAbsolute, join, relative, resolve, sep } from 'node:path';
-import type Anthropic from '@anthropic-ai/sdk';
+import type { ToolDef } from './llm/types';
 import { executeCode } from '../vendor/rs-sdk/mcp/execute-code';
 import { formatWorldState } from '../vendor/rs-sdk/sdk/formatter';
 import { botLink } from './bot';
 import { env, settings } from './config';
 import { metrics } from './metrics';
 
-type Tool = Anthropic.Beta.BetaTool;
-
-export const TOOLS: Tool[] = [
+export const TOOLS: ToolDef[] = [
     {
         name: 'execute_code',
         description:
@@ -28,7 +26,6 @@ export const TOOLS: Tool[] = [
             },
             required: ['code', 'purpose'],
         },
-        eager_input_streaming: true,
     },
     {
         name: 'get_world_state',
@@ -169,6 +166,9 @@ export interface ToolOutcome {
 /** Validate a tool input (eager input streaming means the API no longer does it) and run it. */
 export async function runTool(name: string, input: unknown, signal: AbortSignal): Promise<ToolOutcome> {
     const args = (input && typeof input === 'object' ? input : {}) as Record<string, unknown>;
+    if (typeof args.__invalidJson === 'string') {
+        return { text: `Error: your arguments for ${name} were not valid JSON, so nothing ran. Received: ${args.__invalidJson.slice(0, 500)}`, isError: true };
+    }
     switch (name) {
         case 'execute_code': {
             if (typeof args.code !== 'string' || !args.code.trim()) return { text: 'Error: `code` must be a non-empty string.', isError: true };

@@ -10,10 +10,12 @@ import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { ServerWebSocket } from 'bun';
-import { agent } from './agent';
+import { agent, providers } from './agent';
 import { botLink } from './bot';
 import { gameClient } from './client';
-import { env, settings, updateSettings, type Settings } from './config';
+import { activeModel, env, settings, updateSettings, type Settings } from './config';
+import { ANTHROPIC_MODELS } from './llm/anthropic';
+import { endpoints, finishOAuth, keyInfo, keySource, models, modelsForKey, openrouterKey, saveKey, startOAuth, validateKey } from './openrouter';
 import { emit, recentEvents, subscribe } from './events';
 import { metrics } from './metrics';
 import { readNotes, writeNotes } from './tools';
@@ -98,7 +100,34 @@ export function statusSnapshot() {
             inGame: botLink.isLive(),
         },
         metrics: metrics.snapshot(),
+        llm: {
+            provider: settings.provider,
+            model: activeModel(),
+            sessionModel: agent.sessionModel,
+            unavailable: providers[settings.provider].unavailableReason(),
+            waitingUntil: agent.waitingUntil || null,
+        },
         auth: !!env.password,
+    };
+}
+
+/** This dashboard's public origin, as the browser sees it (behind a proxy too). */
+function originOf(req: Request): string {
+    const url = new URL(req.url);
+    const proto = req.headers.get('x-forwarded-proto') ?? url.protocol.replace(':', '');
+    const host = req.headers.get('x-forwarded-host') ?? req.headers.get('host') ?? url.host;
+    return `${proto}://${host}`;
+}
+
+async function openrouterAccount() {
+    const key = openrouterKey();
+    const info = key ? await keyInfo() : null;
+    return {
+        hasKey: !!key,
+        keySource: keySource(),
+        keyHint: key ? `…${key.slice(-4)}` : null,
+        info,
+        freeRequestsToday: metrics.freeRequestsToday(),
     };
 }
 
@@ -136,6 +165,23 @@ const post: Record<string, Handler> = {
         return json({ run });
     },
     '/api/bench/stop': () => json({ run: metrics.endRun('stopped') }),
+    '/api/openrouter/key': async req => {
+        const { key } = await body<{ key: string }>(req);
+        if (typeof key !== 'string') return fail('key must be a string');
+        const trimmed = key.trim();
+        if (trimmed) await validateKey(trimmed);
+        saveKey(trimmed);
+        emit('operator', trimmed ? 'OpenRouter API key saved' : 'OpenRouter API key removed');
+        return json(await openrouterAccount());
+    },
+    '/api/openrouter/connect': req => json(startOAuth(`${originOf(req)}/`)),
+    '/api/openrouter/exchange': async req => {
+        const { code, state } = await body<{ code: string; state: string }>(req);
+        if (typeof code !== 'string' || typeof state !== 'string') return fail('code and state are required');
+        await finishOAuth(code, state);
+        emit('operator', 'Connected to OpenRouter: API key created and saved');
+        return json(await openrouterAccount());
+    },
 };
 
 const get: Record<string, Handler> = {
@@ -147,6 +193,17 @@ const get: Record<string, Handler> = {
     '/api/client-log': () => json(gameClient.log.slice(-200)),
     '/api/notes': () => json({ notes: readNotes() }),
     '/api/stream': req => sse(req),
+    '/api/openrouter/models': async (_req, url) => {
+        const force = url.searchParams.get('refresh') === '1';
+        const [list, available] = await Promise.all([models(force), modelsForKey(force)]);
+        return json({ models: list, availableIds: available ? [...available] : null });
+    },
+    '/api/openrouter/account': async (_req, url) => {
+        if (url.searchParams.get('refresh') === '1') await keyInfo(true);
+        return json(await openrouterAccount());
+    },
+    '/api/openrouter/endpoints': async (_req, url) => json(await endpoints(url.searchParams.get('model') ?? '')),
+    '/api/anthropic/models': () => json(ANTHROPIC_MODELS),
 };
 
 function sse(req: Request): Response {

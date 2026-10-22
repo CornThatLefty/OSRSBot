@@ -173,3 +173,45 @@ td.run-label { white-space: normal; min-width: 90px; }
 .login { position: fixed; inset: 0; z-index: 20; background: var(--bg); display: grid; place-items: center; padding: 16px; }
 .login-card { width: min(360px, 100%); display: flex; flex-direction: column; gap: 12px; }
 .login-card label { display: flex; flex-direction: column; gap: 4px; color: var(--muted); font-size: 13px; }
+
+/* AI model card */
+.or-account { background: var(--panel-2); border-radius: 8px; padding: 8px 10px; font-size: 12.5px; margin-bottom: 10px; display: flex; flex-direction: column; gap: 6px; }
+.or-account .row { justify-content: space-between; gap: 8px; flex-wrap: wrap; }
+.or-account .actions { display: flex; gap: 6px; flex-wrap: wrap; }
+.or-key-form { display: flex; gap: 6px; margin-bottom: 10px; }
+.or-key-form input { flex: 1; }
+.meter { height: 6px; border-radius: 4px; background: #111317; overflow: hidden; }
+.meter > span { display: block; height: 100%; background: var(--good); }
+.meter.warn > span { background: var(--warn); }
+.meter.bad > span { background: var(--bad); }
+.current-model { display: flex; justify-content: space-between; align-items: flex-start; gap: 10px; margin-bottom: 8px; }
+.current-model-main { min-width: 0; }
+.model-name { font-weight: 600; font-size: 14px; }
+.current-model code { font-size: 11.5px; word-break: break-all; }
+.tags { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 4px; }
+.tag { font-size: 10.5px; padding: 1px 6px; border-radius: 999px; border: 1px solid var(--line); color: var(--muted); white-space: nowrap; }
+.tag.free { color: var(--good); border-color: #24513a; }
+.tag.reason { color: var(--think); border-color: #3d3360; }
+.tag.blocked { color: var(--bad); border-color: #5a2a2a; }
+.tag.price { color: var(--accent-2); border-color: #5a4720; }
+.picker { border: 1px solid var(--line); border-radius: 8px; padding: 8px; margin-bottom: 10px; background: #12151a; }
+.picker-controls { display: flex; gap: 6px; }
+.picker-controls select { width: auto; }
+.picker-filters { display: flex; gap: 12px; align-items: center; margin: 6px 0; flex-wrap: wrap; }
+.picker-filters button { margin-left: auto; }
+.model-list { max-height: 340px; overflow: auto; display: flex; flex-direction: column; gap: 3px; }
+.model-row { display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 5px 7px; border-radius: 6px; background: #171a1f; border: 1px solid transparent; cursor: pointer; }
+.model-row:hover { border-color: #3c434d; }
+.model-row.selected { border-color: var(--accent); background: #221d10; }
+.model-row.blocked { opacity: .55; }
+.model-row .mr-main { min-width: 0; flex: 1; }
+.model-row .mr-name { font-size: 12.5px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.model-row code { font-size: 10.5px; color: var(--muted); }
+.model-row .mr-side { display: flex; flex-direction: column; align-items: flex-end; gap: 3px; flex: none; }
+.fallbacks { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; flex-wrap: wrap; }
+.label-sm { font-size: 12px; color: var(--muted); }
+.chips { display: flex; gap: 4px; flex-wrap: wrap; }
+.chip { font-size: 11.5px; padding: 2px 4px 2px 8px; border-radius: 999px; background: var(--panel-2); border: 1px solid var(--line); display: inline-flex; align-items: center; gap: 4px; }
+.chip button { padding: 0 5px; border: none; background: none; color: var(--muted); }
+.chip button:hover { color: var(--bad); }
+#model-card details { margin-top: 8px; }

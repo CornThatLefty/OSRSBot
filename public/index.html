@@ -104,6 +104,99 @@
       <p id="agent-detail" class="muted small-text"></p>
     </div>
 
+    <div class="card" id="model-card">
+      <div class="card-head">
+        <h2>AI model</h2>
+        <div class="tabs" role="tablist">
+          <button class="tab provider-tab" data-provider="openrouter" role="tab">OpenRouter</button>
+          <button class="tab provider-tab" data-provider="anthropic" role="tab">Claude API</button>
+        </div>
+      </div>
+
+      <div id="or-panel">
+        <div id="or-account" class="or-account"></div>
+        <div id="or-key-form" class="or-key-form" hidden>
+          <input id="or-key-input" type="password" placeholder="sk-or-v1-…" autocomplete="off">
+          <button id="or-key-save" class="primary small">Save key</button>
+          <button id="or-key-cancel" class="small">Cancel</button>
+        </div>
+
+        <div class="current-model">
+          <div class="current-model-main">
+            <div id="or-model-name" class="model-name">–</div>
+            <code id="or-model-id" class="muted"></code>
+            <div id="or-model-tags" class="tags"></div>
+          </div>
+          <button id="or-browse" class="small">Browse models</button>
+        </div>
+
+        <div id="or-picker" class="picker" hidden>
+          <div class="picker-controls">
+            <input id="or-search" placeholder="Search models (name, id, provider)…" autocomplete="off">
+            <select id="or-sort" title="Sort">
+              <option value="free">Free first</option>
+              <option value="newest">Newest</option>
+              <option value="price">Cheapest</option>
+              <option value="context">Largest context</option>
+            </select>
+          </div>
+          <div class="picker-filters">
+            <label class="check"><input type="checkbox" id="or-f-free"> Free only</label>
+            <label class="check"><input type="checkbox" id="or-f-reasoning"> Reasoning</label>
+            <label class="check" id="or-f-usable-wrap" hidden><input type="checkbox" id="or-f-usable" checked> Usable with my key</label>
+            <button id="or-refresh" class="small" title="Reload the model list from OpenRouter">↻</button>
+          </div>
+          <div id="or-model-list" class="model-list"></div>
+          <p class="muted small-text">Only models that support tool calling are listed (the agent needs it). <b>+ fallback</b> adds a model to try when the main one is rate-limited or down.</p>
+        </div>
+
+        <div class="fallbacks">
+          <span class="label-sm">Fallbacks</span>
+          <div id="or-fallbacks" class="chips"></div>
+        </div>
+
+        <form id="or-form" class="form">
+          <label>Reasoning effort <select name="effort" id="or-effort"></select></label>
+          <label>Max output tokens <input name="maxOutputTokens" type="number" min="1000" max="128000" step="1000"></label>
+          <label>Provider routing
+            <select name="providerSort">
+              <option value="">Balanced (OpenRouter default)</option>
+              <option value="price">Cheapest provider</option>
+              <option value="throughput">Fastest output</option>
+              <option value="latency">Lowest latency</option>
+              <option value="exacto">Best tool calling (:exacto)</option>
+            </select></label>
+          <label>Data collection
+            <select name="dataCollection">
+              <option value="account">Use my account settings</option>
+              <option value="allow">Allow</option>
+              <option value="deny">Deny (no logging/training)</option>
+            </select></label>
+          <label>Max input price ($/M, 0 = any) <input name="maxPromptPrice" type="number" min="0" step="0.1"></label>
+          <label>Max output price ($/M, 0 = any) <input name="maxCompletionPrice" type="number" min="0" step="0.1"></label>
+          <button class="primary" type="submit">Save</button>
+          <button type="button" id="or-apply-now" title="Save and start a new agent session with these settings now">Save &amp; apply now</button>
+          <span id="or-msg" class="muted small-text"></span>
+        </form>
+        <details id="or-endpoints-details">
+          <summary>Providers serving this model</summary>
+          <div class="table-wrap"><table id="or-endpoints"><thead><tr><th>Provider</th><th>$ in/out per M</th><th>Context</th><th>Uptime</th><th>Latency</th><th>Tok/s</th></tr></thead><tbody></tbody></table></div>
+        </details>
+        <p class="muted small-text">Free models are rate-limited (20 requests/min, and 50/day until your account has bought 10+ credits, then 1000/day) and many need <a href="https://openrouter.ai/settings/privacy" target="_blank" rel="noopener">free endpoints enabled in your privacy settings</a>. Model changes apply from the next agent session.</p>
+      </div>
+
+      <div id="an-panel" hidden>
+        <form id="an-form" class="form">
+          <label>Model <select name="anthropicModel" id="an-model"></select></label>
+          <label>Effort <select name="effort"><option>low</option><option>medium</option><option>high</option><option>xhigh</option><option>max</option></select></label>
+          <button class="primary" type="submit">Save</button>
+          <button type="button" id="an-apply-now">Save &amp; apply now</button>
+          <span id="an-msg" class="muted small-text"></span>
+        </form>
+        <p class="muted small-text">Calls the Claude API directly with adaptive thinking, prompt caching, compaction and refusal fallbacks. Needs <code>ANTHROPIC_API_KEY</code> in <code>.env</code> (or <code>ant auth login</code> on the server).</p>
+      </div>
+    </div>
+
     <div class="card">
       <h2>Progress</h2>
       <div class="stats">
@@ -161,15 +254,6 @@
         <label>Server <input name="server" placeholder="rs-sdk-demo.fly.dev"></label>
         <label>Client mode
           <select name="clientMode"><option value="lite">Lite (headless, cheap)</option><option value="browser">Browser (3D view)</option></select></label>
-        <label>Model
-          <select name="model">
-            <option value="claude-opus-5-5">Claude Opus 5.5</option>
-            <option value="claude-sonnet-5-5">Claude Sonnet 5.5</option>
-            <option value="claude-haiku-5-5">Claude Haiku 5.5</option>
-            <option value="claude-fable-5-1">Claude Fable 5.1</option>
-          </select></label>
-        <label>Effort
-          <select name="effort"><option>low</option><option>medium</option><option>high</option><option>xhigh</option><option>max</option></select></label>
         <label>Tool calls per session <input name="maxTurnsPerSession" type="number" min="5" max="200"></label>
         <label>Max code run (s) <input name="maxCodeSeconds" type="number" min="10" max="1800"></label>
         <label>Daily budget ($, 0 = none) <input name="dailyBudgetUsd" type="number" min="0" step="1"></label>

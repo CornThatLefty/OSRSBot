@@ -38,12 +38,20 @@ onSettingsChange(changed => {
         })();
     }
     if ('goal' in changed) emit('operator', 'Goal updated; it applies from the next session (use "New session" to apply now)');
+    const modelKeys = ['provider', 'openrouterModel', 'anthropicModel', 'openrouterFallbacks', 'effort'] as const;
+    if (modelKeys.some(k => k in changed)) {
+        const what = Object.entries(changed).filter(([k]) => (modelKeys as readonly string[]).includes(k)).map(([k, v]) => `${k}=${Array.isArray(v) ? v.join(',') || 'none' : v}`).join(', ');
+        emit('operator', `Model settings changed (${what}); they apply from the next session`);
+    }
 });
 
 // At the end of a benchmark run, pause so the agent doesn't keep spending outside the measured window.
 metrics.setRunEndHandler(() => agent.pause());
 
 setInterval(() => broadcast({ type: 'status', status: statusSnapshot() }), 2_000);
+
+// Keep the SDK attached while a game client runs (a first connect can fail while the client is still logging in).
+setInterval(() => { if (gameClient.status === 'running') void botLink.reconnectIfIdle(); }, 15_000);
 
 startServer();
 

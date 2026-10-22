@@ -1,6 +1,6 @@
 # OSRSBot
 
-**A Claude-powered bot for [rs-sdk](https://github.com/MaxBittker/rs-sdk), the research server for RuneScape-style bots.** Give it a goal and it plays on its own for hours: it writes TypeScript against the game, runs it, checks what happened and adjusts. It runs on a small server, you watch and steer it from a browser dashboard (including a live 3D view of what the bot sees), and it scores itself against the demo server's leaderboard so you can benchmark models.
+**An AI agent that plays [rs-sdk](https://github.com/MaxBittker/rs-sdk), the research server for RuneScape-style bots, on any model from [OpenRouter](https://openrouter.ai) (free ones included) or the Claude API.** Give it a goal and it plays on its own for hours: it writes TypeScript against the game, runs it, checks what happened and adjusts. It runs on a small server, you watch and steer it from a browser dashboard (including a live 3D view of what the bot sees), and it scores itself against the demo server's leaderboard so you can benchmark models.
 
 ![The OSRSBot dashboard: the bot's live 3D game client in Lumbridge, controls, progress stats, skills and inventory](docs/images/dashboard.png)
 
@@ -9,9 +9,22 @@
 
 ## What it does
 
-**Plays by writing code.** Claude (Opus 5.5 by default) works through rs-sdk's `execute_code`: it writes a TypeScript snippet against the `bot` and `sdk` APIs, runs it on the character, reads the result and the world state, and iterates, starting with 10-second experiments and growing them into grinding loops once they work. It can search rs-sdk's tested snippets, its game wiki (item, NPC and shop locations) and the API docs, and keeps its own notes between sessions.
+**Plays by writing code.** The agent works through rs-sdk's `execute_code`: it writes a TypeScript snippet against the `bot` and `sdk` APIs, runs it on the character, reads the result and the world state, and iterates, starting with 10-second experiments and growing them into grinding loops once they work. It can search rs-sdk's tested snippets, its game wiki (item, NPC and shop locations) and the API docs, and keeps its own notes between sessions.
 
-**Runs for days without running up a bill.** The agent works in sessions: each one starts fresh from the goal, its notes and the current game state, so context stays bounded. The large system prompt (rs-sdk's guide and API reference) is prompt-cached, long sessions are compacted server-side, and a daily budget pauses the agent when it's spent.
+**Runs on any model, free ones included.** Out of the box it uses OpenRouter's free model router, so it costs nothing to try. The dashboard's **AI model** card makes switching easy:
+
+<img src="docs/images/models.png" alt="AI model card: OpenRouter connection, the current model, a searchable model browser filtered to free models, fallbacks, reasoning effort and routing options" width="420" align="right">
+
+- **Connect OpenRouter** in one click (it creates a key for you), or paste a key.
+- See what you've spent today and this month, your key's spending limit, and today's free-model quota (50 requests a day until your account has bought 10+ credits, then 1000).
+- **Browse every tool-capable model** on OpenRouter: search, filter to free or reasoning models, sort by price, context size or age, and see each one's price, context window and supported reasoning levels. Models your privacy settings block are marked.
+- **Fallback models** take over when the main one is rate-limited or down.
+- **Reasoning effort** offers only the levels the chosen model supports.
+- **Routing:** prefer the cheapest, fastest or lowest-latency provider, or the best tool-calling ones (`:exacto`); cap prices per million tokens; deny providers that log or train on prompts.
+- See which providers serve the selected model, with their prices, uptime, latency and speed.
+- Or switch to the **Claude API** directly (adaptive thinking, prompt caching, compaction, refusal fallbacks).
+
+**Runs for days without running up a bill.** The agent works in sessions: each one starts fresh from the goal, its notes and the current game state, so context stays bounded. The exact cost OpenRouter reports for every request counts against a daily budget that pauses the agent when it's spent. The large system prompt (rs-sdk's guide and API reference) is prompt-cached where the model supports it, and models with small context windows get a slimmer prompt and trimmed old tool output. Rate limits, an exhausted free quota (waits until midnight UTC), missing credits and privacy-setting blocks are each handled with a clear message instead of a crash loop.<br clear="right">
 
 **Shows you what it's doing.** The dashboard streams the agent's reasoning, every snippet it runs and the results, alongside the bot's surroundings, stats, skills and inventory. Send it a message mid-run, change its goal, interrupt a loop, or pause it.
 
@@ -32,27 +45,30 @@
 
 ## How it works
 
-![Architecture: the dashboard, Claude agent, tools, metrics and game client supervisor run in one Bun process; the agent talks to the Claude API, and the SDK and game client talk to the rs-sdk demo server's gateway and game server](docs/images/architecture.svg)
+![Architecture: the dashboard, AI agent, tools, metrics and game client supervisor run in one Bun process; the agent talks to OpenRouter or the Claude API, and the SDK and game client talk to the rs-sdk demo server's gateway and game server](docs/images/architecture.svg)
 
-rs-sdk's SDK can't reach the game server directly: a logged-in game client has to be attached to rs-sdk's gateway, which pairs it with the SDK. OSRSBot runs that client itself (lite or browser), holds the SDK's control connection, and gives Claude tools on top of it. `execute_code` is rs-sdk's own implementation, so any snippet from rs-sdk's [`learnings/`](https://github.com/MaxBittker/rs-sdk/tree/main/learnings) works unchanged.
+rs-sdk's SDK can't reach the game server directly: a logged-in game client has to be attached to rs-sdk's gateway, which pairs it with the SDK. OSRSBot runs that client itself (lite or browser), holds the SDK's control connection, and gives the model tools on top of it. `execute_code` is rs-sdk's own implementation, so any snippet from rs-sdk's [`learnings/`](https://github.com/MaxBittker/rs-sdk/tree/main/learnings) works unchanged.
 
 ## Quick start
 
-Needs [Bun](https://bun.sh) 1.3+, git, and a [Claude API key](https://console.anthropic.com/).
+Needs [Bun](https://bun.sh) 1.3+, git, and an [OpenRouter account](https://openrouter.ai) (free) or a [Claude API key](https://console.anthropic.com/).
 
 ```bash
 git clone https://github.com/CornThatLefty/OSRSBot.git && cd OSRSBot
 bun install
 bun run setup          # clones rs-sdk into vendor/ and installs its dependencies
-cp .env.example .env   # add ANTHROPIC_API_KEY (and DASHBOARD_PASSWORD on a server)
+cp .env.example .env   # optional: OPENROUTER_API_KEY or ANTHROPIC_API_KEY; DASHBOARD_PASSWORD on a server
 bun start
 ```
 
 Open http://localhost:8080, then:
 
-1. **Settings** → pick a bot name (1-12 letters/digits). The server creates the account on first login. The generated password is saved in `data/credentials.json`; **back up `data/`** or you lose the account.
-2. **Control → Client → Start.** Wait for the client pill to turn green (logged in). The browser client takes up to a minute.
-3. Set a **goal** and press **Agent → Start**.
+1. **AI model** → **Connect OpenRouter** (or paste a key). The default model, `openrouter/free`, costs nothing. If free models fail with a privacy error, enable the free-endpoint options in your [OpenRouter privacy settings](https://openrouter.ai/settings/privacy).
+2. **Settings** → pick a bot name (1-12 letters/digits). The server creates the account on first login. The generated password is saved in `data/credentials.json`; **back up `data/`** or you lose the account.
+3. **Control → Client → Start.** Wait for the client pill to turn green (logged in). The browser client takes up to a minute.
+4. Set a **goal** and press **Agent → Start**.
+
+Free models are a fine way to try it, but how far the bot gets depends a lot on the model: strong tool-calling models get much further. Compare them with benchmark runs.
 
 The bot starts on the tutorial island; the agent knows to skip it.
 
@@ -83,7 +99,7 @@ PUPPETEER_SKIP_DOWNLOAD=true bun install   # use Arch's chromium instead of pupp
 bun run setup                              # clones rs-sdk into vendor/
 
 cp .env.example .env && nano .env
-#   ANTHROPIC_API_KEY=...
+#   OPENROUTER_API_KEY=...   (or skip it and use Connect OpenRouter in the dashboard)
 #   DASHBOARD_PASSWORD=...
 #   CHROME_PATH=/usr/bin/chromium
 
@@ -108,7 +124,7 @@ On a VM or bare-metal host, Docker is the shortest route (Chromium is included i
 
 ```bash
 git clone https://github.com/CornThatLefty/OSRSBot.git osrsbot && cd osrsbot
-cp .env.example .env && nano .env      # ANTHROPIC_API_KEY, DASHBOARD_PASSWORD
+cp .env.example .env && nano .env      # DASHBOARD_PASSWORD, and OPENROUTER_API_KEY or ANTHROPIC_API_KEY
 docker compose up -d --build
 ```
 
@@ -127,19 +143,21 @@ Same as the Arch steps, with your distro's packages (on Debian/Ubuntu, `apt inst
 | Interrupt | Cancels the code that's running now; the agent sees it was interrupted and carries on. |
 | Message box | Sent to the agent as an `[Operator]` message after its current step. |
 | Benchmark → Start run | Snapshots the bot, optionally swaps in a run-specific goal, restarts the session, and scores the run when the timer ends. The agent pauses at the end. |
-| Settings | Model, effort, tool calls per session, max length of one code run, daily budget, client mode, chat visibility. Bot name, server, client mode and chat changes restart the client. |
+| AI model | Provider (OpenRouter or Claude API), model, fallbacks, reasoning effort, output cap, provider routing and price caps, OpenRouter connection. |
+| Settings | Tool calls per session, max length of one code run, daily budget, client mode, chat visibility. Bot name, server, client mode and chat changes restart the client. |
 
-Model and effort apply from the next session. Benchmark results are in `data/runs.json`, every event in `data/logs/<date>.jsonl`, and per-minute XP in `data/logs/xp-<date>.jsonl`.
+Model changes apply from the next session (**Save & apply now** starts one). Benchmark results are in `data/runs.json`, every event in `data/logs/<date>.jsonl`, and per-minute XP in `data/logs/xp-<date>.jsonl`.
 
 ### Comparing models
 
-Start a run per configuration with the same goal and length, for example "Train Woodcutting as fast as you can" for 15 minutes on `claude-opus-5-5`/`high`, then on `claude-sonnet-5-5`/`medium`. The runs table shows XP gained, levels, peak XP/min, average XP/hour and API cost side by side. Runs happen one after another on the same bot, so its position, levels and inventory carry over: put the bot back at a known spot with similar gear before each run, or alternate configurations and compare averages. For strictly fresh-account comparisons, use your own rs-sdk server rather than creating many accounts on the demo server.
+Start a run per configuration with the same goal and length, for example "Train Woodcutting as fast as you can" for 15 minutes on `openrouter/free`, then on a paid model such as `anthropic/claude-sonnet-5.5` picked from the model browser. The runs table shows XP gained, levels, peak XP/min, average XP/hour and API cost side by side. Runs happen one after another on the same bot, so its position, levels and inventory carry over: put the bot back at a known spot with similar gear before each run, or alternate configurations and compare averages. For strictly fresh-account comparisons, use your own rs-sdk server rather than creating many accounts on the demo server.
 
 ## Safety notes
 
 - **Player chat is off by default** (`showChat`). Other players' chat is a prompt-injection channel into an agent that runs code on your server. The system prompt tells the agent to treat game text as untrusted, but leave chat off unless you need it.
 - The agent's code runs inside this process with its permissions. Run it as an unprivileged user (the systemd unit does) or in Docker.
 - Keep to one bot on the shared demo server (see the warning at the top).
+- An OpenRouter key saved from the dashboard (typed in, or created by Connect OpenRouter) is kept in `data/secrets.json`. Give it a spending limit at [openrouter.ai/settings/keys](https://openrouter.ai/settings/keys) as a hard cap on top of the daily budget.
 - The dashboard password is the only thing between the internet and code execution on your server: use a long random one.
 
 ## Layout
@@ -150,7 +168,10 @@ src/
   config.ts    env + dashboard-editable settings (data/settings.json)
   bot.ts       credentials, bot.env for rs-sdk, the SDK control connection
   client.ts    game client supervisor (lite runner / headless Chrome + screencast)
-  agent.ts     Claude session loop (streaming, caching, compaction, fallbacks, budget)
+  agent.ts     session loop: kickoff, tool calls, error handling, budget
+  llm/         providers behind one interface: openrouter.ts (streaming, routing,
+               cost, context trimming) and anthropic.ts (Claude API)
+  openrouter.ts  OpenRouter key, OAuth connect, model catalog, key limits, endpoints
   tools.ts     execute_code, get_world_state, search/read_knowledge, update_notes
   metrics.ts   XP rates, 15s peak, hiscores scrape, benchmark runs, API spend
   server.ts    dashboard HTTP API, SSE stream, 3D view WebSocket, login

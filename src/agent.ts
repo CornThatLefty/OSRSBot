@@ -1,38 +1,33 @@
-// The Claude agent loop.
+// The agent loop.
 //
 // The agent works in sessions. Each session is a fresh conversation that starts from the goal, the
 // agent's own persistent notes and the current game state, and runs until the agent ends its turn or
-// uses up maxTurnsPerSession tool calls. Inside a session the history is append-only (server-side
-// compaction handles length), so prompt caching and thinking blocks stay valid. Between sessions
+// uses up maxTurnsPerSession tool calls. Inside a session the history is append-only (the provider
+// keeps it in its native format), so prompt caching and reasoning state stay valid. Between sessions
 // nothing carries over except notes.md, which keeps cost and context bounded on a run that lasts days.
+//
+// The model behind it is pluggable: OpenRouter (any of its models, free ones included) or the Claude
+// API directly. See src/llm/.
 
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import Anthropic from '@anthropic-ai/sdk';
 import { formatWorldStateSummary } from '../vendor/rs-sdk/sdk/formatter';
 import { botLink } from './bot';
 import { gameClient } from './client';
-import { env, settings } from './config';
+import { activeModel, env, settings } from './config';
 import { broadcast, emit } from './events';
+import { AnthropicProvider } from './llm/anthropic';
+import { OpenRouterProvider } from './llm/openrouter';
+import { LlmError, type ChatSession, type Provider, type SystemBlock, type ToolCall, type ToolResult, type TurnResult } from './llm/types';
 import { metrics } from './metrics';
 import { TOOLS, readNotes, runTool } from './tools';
 
-type Message = Anthropic.Beta.BetaMessage;
-type MessageParam = Anthropic.Beta.BetaMessageParam;
-type ContentParam = Anthropic.Beta.BetaContentBlockParam;
-
 export type AgentStatus = 'idle' | 'running' | 'paused' | 'waiting' | 'error';
 
-/** $ per million tokens: input, output, cache read. Cache writes bill at 1.25x input (5-minute TTL). */
-const PRICES: Record<string, [number, number, number]> = {
-    'claude-fable-5-1': [10, 50, 0.25],
-    'claude-opus-5-5': [4, 20, 0.2],
-    'claude-sonnet-5-5': [2, 10, 0.2],
-    'claude-haiku-5-5': [0.1, 0.5, 0.01],
+const providers: Record<'anthropic' | 'openrouter', Provider> = {
+    anthropic: new AnthropicProvider(),
+    openrouter: new OpenRouterProvider(),
 };
-
-/** Models that accept `fallbacks: "default"` (server-side retry on another model if a safety classifier declines). */
-const FALLBACK_MODELS = new Set(['claude-fable-5-1', 'claude-opus-5-5', 'claude-sonnet-5-5']);
 
 const SYSTEM_INTRO = `You are an autonomous agent playing a RuneScape-style MMO (a 2004-era LostCity server run for bot research) through the rs-sdk TypeScript SDK. Nobody is watching turn by turn: you run for hours, in sessions. Each session starts with a fresh context containing your goal, your own notes from earlier sessions and the current game state.
 
@@ -55,30 +50,26 @@ function loadDoc(path: string): string {
     try { return readFileSync(join(env.rsSdkDir, path), 'utf-8'); } catch { return `(${path} missing: run \`bun run setup\`)`; }
 }
 
-let systemCache: Anthropic.Beta.BetaTextBlockParam[] | null = null;
+let systemCache: SystemBlock[] | null = null;
 
-/** Frozen system prompt: identical bytes every request, so the cache keeps hitting. */
-function systemPrompt(): Anthropic.Beta.BetaTextBlockParam[] {
+/** Frozen system prompt: identical bytes every request, so prompt caches keep hitting. */
+function systemPrompt(): SystemBlock[] {
     systemCache ??= [
-        { type: 'text', text: SYSTEM_INTRO },
-        { type: 'text', text: `<rs-sdk-guide path="CLAUDE.md">\n${loadDoc('CLAUDE.md')}\n</rs-sdk-guide>` },
+        { text: SYSTEM_INTRO },
+        { text: `<rs-sdk-guide path="CLAUDE.md">\n${loadDoc('CLAUDE.md')}\n</rs-sdk-guide>` },
         {
-            type: 'text',
             text: `<rs-sdk-api-reference path="sdk/API.md">\n${loadDoc('sdk/API.md')}\n</rs-sdk-api-reference>`,
-            cache_control: { type: 'ephemeral' },
+            cache: true,
+            compact: 'The full rs-sdk API reference (every bot.* and sdk.* method with signatures) is in sdk/API.md. It is not included here to save context: use search_knowledge or read_knowledge on sdk/API.md whenever you need a method you have not used yet.',
         },
     ];
     return systemCache;
 }
 
-function priceOf(model: string, usage: Anthropic.Beta.BetaUsage): number {
-    const [input, output, cacheRead] = PRICES[model] ?? PRICES['claude-opus-5-5']!;
-    return (
-        (usage.input_tokens * input +
-            (usage.cache_creation_input_tokens ?? 0) * input * 1.25 +
-            (usage.cache_read_input_tokens ?? 0) * cacheRead +
-            usage.output_tokens * output) / 1_000_000
-    );
+/** Milliseconds until the next UTC midnight, when daily free-model quotas reset. */
+function untilUtcMidnight(): number {
+    const now = new Date();
+    return Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + 1) - now.getTime() + 60_000;
 }
 
 class Agent {
@@ -88,16 +79,19 @@ class Agent {
     sessionTurns = 0;
     sessionStartedAt = 0;
     sessionCostUsd = 0;
+    sessionModel = '';
     currentTool: { name: string; purpose: string; startedAt: number } | null = null;
+    /** When the agent is waiting out a rate limit, until when. */
+    waitingUntil = 0;
 
     private wantRunning = false;
     private wantPause = false;
     private restartSession = false;
     private loop: Promise<void> | null = null;
     private abort: AbortController | null = null;
+    private toolAbort: AbortController | null = null;
     private operatorQueue: string[] = [];
     private wake: (() => void) | null = null;
-    private client: Anthropic | null = null;
 
     start(): void {
         this.wantRunning = true;
@@ -119,10 +113,11 @@ class Agent {
         await this.loop;
     }
 
-    /** End the current session after this step and start a fresh one (e.g. after a goal change). */
+    /** End the current session after this step and start a fresh one (e.g. after a goal or model change). */
     newSession(): void {
         this.restartSession = true;
         this.abort?.abort(new Error('Session restarted by operator'));
+        this.poke();
     }
 
     /** Interrupt whatever execute_code is running, without ending the session. */
@@ -135,8 +130,6 @@ class Agent {
         emit('operator', text);
         this.poke();
     }
-
-    private toolAbort: AbortController | null = null;
 
     private poke(): void {
         this.wake?.();
@@ -170,6 +163,14 @@ class Agent {
         return settings.dailyBudgetUsd > 0 && metrics.spendToday() >= settings.dailyBudgetUsd;
     }
 
+    /** Wait out a delay that the operator can cut short (resume, new session, stop). */
+    private async waitFor(ms: number, status: AgentStatus, detail: string): Promise<void> {
+        this.waitingUntil = Date.now() + ms;
+        this.setStatus(status, detail);
+        await this.sleep(ms);
+        this.waitingUntil = 0;
+    }
+
     private async run(): Promise<void> {
         emit('agent', 'Agent started');
         let failures = 0;
@@ -181,6 +182,13 @@ class Agent {
                 emit('error', `Daily budget of $${settings.dailyBudgetUsd} reached; agent paused. Raise it in Settings and resume.`);
                 continue;
             }
+            const provider = providers[settings.provider];
+            const missing = provider.unavailableReason();
+            if (missing) {
+                this.setStatus('waiting', missing);
+                await this.sleep(10_000);
+                continue;
+            }
             if (gameClient.status !== 'running' || !botLink.isLive()) {
                 this.setStatus('waiting', 'Waiting for the game client to log in');
                 // Covers an SDK connect that failed while the client was still starting.
@@ -189,26 +197,56 @@ class Agent {
                 continue;
             }
             try {
-                await this.session();
+                await this.session(provider);
                 failures = 0;
                 if (this.wantRunning && !this.wantPause) await this.sleep(3_000);
             } catch (error) {
-                if (error instanceof Anthropic.AuthenticationError || error instanceof Anthropic.PermissionDeniedError) {
-                    emit('error', `Claude API rejected the credentials: ${error.message}. Set ANTHROPIC_API_KEY and restart.`);
-                    this.wantRunning = false;
-                    this.setStatus('error', 'API credentials rejected');
-                    break;
+                if (!(error instanceof LlmError)) {
+                    failures++;
+                    const wait = Math.min(300_000, 15_000 * 2 ** (failures - 1));
+                    const msg = error instanceof Error ? error.message : String(error);
+                    emit('error', `Session failed: ${msg}. Retrying in ${Math.round(wait / 1000)}s.`);
+                    await this.waitFor(wait, 'error', msg.slice(0, 200));
+                    continue;
                 }
-                failures++;
-                const wait = Math.min(300_000, 15_000 * 2 ** (failures - 1));
-                const msg = error instanceof Error ? error.message : String(error);
-                emit('error', `Session failed: ${msg}. Retrying in ${Math.round(wait / 1000)}s.`);
-                this.setStatus('error', msg.slice(0, 200));
-                await this.sleep(wait);
+                await this.handleLlmError(error, ++failures);
             }
         }
+        this.waitingUntil = 0;
         this.setStatus('idle');
         emit('agent', 'Agent stopped');
+    }
+
+    private async handleLlmError(error: LlmError, failures: number): Promise<void> {
+        switch (error.kind) {
+            case 'auth':
+                emit('error', `${error.message}. Fix the API key, then start the agent again.`);
+                this.wantRunning = false;
+                this.setStatus('error', 'API key rejected');
+                return;
+            case 'credits':
+                emit('error', `${error.message}. Agent paused: add credits or pick a free model, then resume.`);
+                this.wantPause = true;
+                return;
+            case 'config':
+                emit('error', `${error.message}. Agent paused until you change the settings and resume.`);
+                this.wantPause = true;
+                return;
+            case 'rate_limit': {
+                // Daily free-model quotas reset at midnight UTC; anything else is a short per-minute limit.
+                const daily = /per[- ]day|daily/i.test(error.message);
+                const wait = error.retryAfterMs ?? (daily ? untilUtcMidnight() : Math.min(300_000, 20_000 * failures));
+                const until = new Date(Date.now() + wait);
+                emit('error', `Rate limited: ${error.message}. Waiting until ${until.toISOString().slice(11, 16)} UTC.${daily ? ' Add a fallback model or pick another model to keep going now.' : ''}`);
+                await this.waitFor(wait, 'waiting', `Rate limited until ${until.toISOString().slice(11, 16)} UTC`);
+                return;
+            }
+            default: {
+                const wait = Math.min(300_000, 15_000 * 2 ** (failures - 1));
+                emit('error', `Model call failed (${error.kind}): ${error.message}. Retrying in ${Math.round(wait / 1000)}s.`);
+                await this.waitFor(wait, 'error', error.message.slice(0, 200));
+            }
+        }
     }
 
     private kickoff(): string {
@@ -227,19 +265,26 @@ class Agent {
         return parts.filter(Boolean).join('\n\n');
     }
 
-    private async session(): Promise<void> {
-        this.client ??= new Anthropic();
+    private async session(provider: Provider): Promise<void> {
         this.sessionNumber++;
         this.sessionTurns = 0;
         this.sessionCostUsd = 0;
         this.sessionStartedAt = Date.now();
         this.restartSession = false;
-        const model = settings.model;
-        const messages: MessageParam[] = [{ role: 'user', content: this.kickoff() }];
-        emit('session_start', `Session ${this.sessionNumber} (${model}, effort ${settings.effort})`, { session: this.sessionNumber });
+        this.sessionModel = activeModel();
+        const chat = provider.startSession({
+            system: systemPrompt(),
+            tools: TOOLS,
+            kickoff: this.kickoff(),
+            model: this.sessionModel,
+            effort: settings.effort,
+            onDelta: (kind, delta) => broadcast({ type: 'delta', kind, delta }),
+        });
+        emit('session_start', `Session ${this.sessionNumber} (${provider.id}: ${this.sessionModel}, effort ${settings.effort})`, { session: this.sessionNumber });
         this.setStatus('running', `Session ${this.sessionNumber}`);
 
         let endReason = 'agent ended its turn';
+        let truncatedRetries = 0;
         for (;;) {
             if (!this.wantRunning) { endReason = 'agent stopped'; break; }
             if (this.restartSession) { endReason = 'restarted by operator'; break; }
@@ -250,84 +295,59 @@ class Agent {
                 this.setStatus('running', `Session ${this.sessionNumber}`);
             }
 
-            const response = await this.callModel(model, messages);
-            if (!response) { endReason = this.restartSession ? 'restarted by operator' : 'agent stopped'; break; }
-            messages.push({ role: 'assistant', content: response.content });
+            const turn = await this.callModel(chat, provider);
+            if (!turn) { endReason = this.restartSession ? 'restarted by operator' : 'agent stopped'; break; }
 
-            if (response.stop_reason === 'refusal') {
-                emit('error', `The model declined to continue${response.stop_details?.category ? ` (${response.stop_details.category})` : ''}. Starting a fresh session.`);
+            if (turn.stop === 'refusal') {
+                emit('error', `The model declined to continue${turn.refusalDetail ? ` (${turn.refusalDetail})` : ''}. Starting a fresh session.`);
                 endReason = 'refusal';
                 break;
             }
-            if (response.stop_reason === 'pause_turn') continue;
-
-            const toolUses = response.content.filter((b): b is Anthropic.Beta.BetaToolUseBlock => b.type === 'tool_use');
-            if (!toolUses.length) {
-                if (response.stop_reason === 'max_tokens') emit('error', 'Response hit max_tokens with no tool call');
+            if (turn.stop === 'pause') continue;
+            if (!turn.toolCalls.length) {
+                if (turn.stop === 'max_tokens') emit('error', 'Response hit the output token limit with no tool call. Raise "Max output tokens" if this keeps happening.');
                 break;
             }
-            if (response.stop_reason === 'max_tokens') {
+            if (turn.stop === 'max_tokens') {
                 // A tool input cut off mid-stream can parse as a valid-looking partial object: don't run it.
-                messages.push({
-                    role: 'user',
-                    content: toolUses.map(t => ({ type: 'tool_result' as const, tool_use_id: t.id, is_error: true, content: 'Your output hit max_tokens and this call was cut off, so it was not run. Send a shorter call.' })),
-                });
+                if (++truncatedRetries > 2) { endReason = 'output repeatedly cut off at max tokens'; break; }
+                chat.addToolResults(turn.toolCalls.map(t => ({
+                    id: t.id, isError: true,
+                    text: 'Your output hit the token limit and this call was cut off, so it was not run. Send a shorter call.',
+                })), []);
                 continue;
             }
+            truncatedRetries = 0;
 
-            const results: ContentParam[] = [];
-            for (const use of toolUses) {
-                results.push(await this.callTool(use));
+            const results: ToolResult[] = [];
+            for (const call of turn.toolCalls) {
+                results.push(await this.callTool(call));
                 this.sessionTurns++;
             }
-            for (const text of this.operatorQueue.splice(0)) {
-                results.push({ type: 'text', text: `[Operator] ${text}` });
-            }
+            const extra = this.operatorQueue.splice(0).map(text => `[Operator] ${text}`);
             const left = settings.maxTurnsPerSession - this.sessionTurns;
             if (left <= 0) {
-                results.push({ type: 'text', text: 'Tool-call budget for this session is used up. Reply with a two-line status now; your notes carry over to the next session.' });
+                extra.push('Tool-call budget for this session is used up. Reply with a two-line status now; your notes carry over to the next session.');
             } else if (left <= 3) {
-                results.push({ type: 'text', text: `${left} tool call(s) left in this session. Make sure your notes are up to date.` });
+                extra.push(`${left} tool call(s) left in this session. Make sure your notes are up to date.`);
             }
-            messages.push({ role: 'user', content: results });
+            chat.addToolResults(results, extra);
 
             if (left < 0) { endReason = 'tool-call budget used'; break; }
         }
 
         const minutes = ((Date.now() - this.sessionStartedAt) / 60_000).toFixed(1);
-        emit('session_end', `Session ${this.sessionNumber} ended (${endReason}) after ${this.sessionTurns} tool calls, ${minutes} min, ~$${this.sessionCostUsd.toFixed(2)}`, {
+        emit('session_end', `Session ${this.sessionNumber} ended (${endReason}) after ${this.sessionTurns} tool calls, ${minutes} min, ~$${this.sessionCostUsd.toFixed(4)}`, {
             session: this.sessionNumber, reason: endReason,
         });
     }
 
-    /** One streamed model call. Returns null if it was aborted by the operator. */
-    private async callModel(model: string, messages: MessageParam[]): Promise<Message | null> {
+    /** One model call. Returns null if it was aborted by the operator. */
+    private async callModel(chat: ChatSession, provider: Provider): Promise<TurnResult | null> {
         this.abort = new AbortController();
-        const betas: Anthropic.Beta.AnthropicBeta[] = ['compact-2026-01-12'];
-        if (FALLBACK_MODELS.has(model)) betas.push('server-side-fallback-2026-07-01');
-        const stream = this.client!.beta.messages.stream(
-            {
-                model,
-                max_tokens: 32_000,
-                system: systemPrompt(),
-                tools: TOOLS,
-                messages,
-                thinking: { type: 'adaptive', display: 'summarized' },
-                output_config: { effort: settings.effort },
-                // Cache the growing conversation too, not just the system prompt.
-                cache_control: { type: 'ephemeral' },
-                context_management: { edits: [{ type: 'compact_20260112' }] },
-                betas,
-                ...(FALLBACK_MODELS.has(model) ? { fallbacks: 'default' as const } : {}),
-            },
-            { signal: this.abort.signal },
-        );
-        stream.on('text', delta => broadcast({ type: 'delta', kind: 'text', delta }));
-        stream.on('thinking', delta => broadcast({ type: 'delta', kind: 'thinking', delta }));
-
-        let message: Message;
+        let turn: TurnResult;
         try {
-            message = await stream.finalMessage();
+            turn = await chat.next(this.abort.signal);
         } catch (error) {
             if (this.abort.signal.aborted) return null;
             throw error;
@@ -335,29 +355,20 @@ class Agent {
             broadcast({ type: 'delta_end' });
         }
 
-        const cost = priceOf(message.model || model, message.usage);
-        this.sessionCostUsd += cost;
-        metrics.addUsage(cost, {
-            input: message.usage.input_tokens,
-            output: message.usage.output_tokens,
-            cacheRead: message.usage.cache_read_input_tokens ?? 0,
-            cacheWrite: message.usage.cache_creation_input_tokens ?? 0,
-        });
-
-        for (const block of message.content) {
-            if (block.type === 'thinking' && block.thinking.trim()) emit('thinking', block.thinking);
-            else if (block.type === 'text' && block.text.trim()) emit('text', block.text);
-            else if (block.type === 'compaction') emit('agent', 'Context compacted by the API');
-            else if (block.type === 'fallback') emit('agent', `${block.from.model} declined; ${block.to.model} continued`);
-        }
-        return message;
+        this.sessionCostUsd += turn.costUsd;
+        metrics.addUsage(turn.costUsd, turn.usage, { provider: provider.id, model: turn.model });
+        if (turn.model && turn.model !== this.sessionModel) turn.notes.push(`Answered by ${turn.model}`);
+        for (const text of turn.thinking) emit('thinking', text);
+        for (const text of turn.text) emit('text', text);
+        for (const note of turn.notes) emit('agent', note);
+        return turn;
     }
 
-    private async callTool(use: Anthropic.Beta.BetaToolUseBlock): Promise<Anthropic.Beta.BetaToolResultBlockParam> {
-        const input = (use.input ?? {}) as Record<string, unknown>;
+    private async callTool(call: ToolCall): Promise<ToolResult> {
+        const input = (call.input ?? {}) as Record<string, unknown>;
         const purpose = typeof input.purpose === 'string' ? input.purpose : '';
-        emit('tool_call', purpose || use.name, { tool: use.name, input, id: use.id });
-        this.currentTool = { name: use.name, purpose, startedAt: Date.now() };
+        emit('tool_call', purpose || call.name, { tool: call.name, input, id: call.id });
+        this.currentTool = { name: call.name, purpose, startedAt: Date.now() };
         broadcast({ type: 'tool', tool: this.currentTool });
         this.toolAbort = new AbortController();
         // Stopping the agent or restarting the session also cancels the running code.
@@ -366,13 +377,13 @@ class Agent {
         outer?.signal.addEventListener('abort', relay, { once: true });
         const started = Date.now();
         try {
-            const out = await runTool(use.name, use.input, this.toolAbort.signal);
-            emit('tool_result', out.text, { tool: use.name, id: use.id, isError: out.isError, ms: Date.now() - started });
-            return { type: 'tool_result', tool_use_id: use.id, content: out.text, ...(out.isError ? { is_error: true } : {}) };
+            const out = await runTool(call.name, call.input, this.toolAbort.signal);
+            emit('tool_result', out.text, { tool: call.name, id: call.id, isError: out.isError, ms: Date.now() - started });
+            return { id: call.id, text: out.text, isError: out.isError };
         } catch (error) {
             const text = `Tool failed: ${error instanceof Error ? error.message : String(error)}`;
-            emit('tool_result', text, { tool: use.name, id: use.id, isError: true, ms: Date.now() - started });
-            return { type: 'tool_result', tool_use_id: use.id, content: text, is_error: true };
+            emit('tool_result', text, { tool: call.name, id: call.id, isError: true, ms: Date.now() - started });
+            return { id: call.id, text, isError: true };
         } finally {
             outer?.signal.removeEventListener('abort', relay);
             this.currentTool = null;
@@ -383,3 +394,4 @@ class Agent {
 }
 
 export const agent = new Agent();
+export { providers };
